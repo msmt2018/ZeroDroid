@@ -136,7 +136,7 @@ pub fn parse_primary_gpt(
 
     if current_lba != 1
         || backup_lba == current_lba
-        || backup_lba >= disk_sectors
+        || backup_lba != disk_sectors - 1
         || first_usable_lba > last_usable_lba
         || last_usable_lba >= disk_sectors
         || is_zero(&disk_guid)
@@ -243,6 +243,58 @@ pub fn parse_primary_gpt(
         disk_size_bytes: disk_size,
         sector_size,
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProtectiveMbr {
+    pub partition_start_lba: u32,
+    pub partition_sector_count: u32,
+}
+
+/// Validates the legacy MBR signature and its single protective 0xEE partition.
+pub fn validate_protective_mbr(
+    data: &[u8],
+    sector_size: u32,
+) -> Result<ProtectiveMbr, ParseError> {
+    if sector_size < 512 || !sector_size.is_power_of_two() {
+        return Err(ParseError::InvalidAlignment);
+    }
+    let disk_size = u64::try_from(data.len()).map_err(|_| ParseError::IntegerOverflow)?;
+    if disk_size % u64::from(sector_size) != 0 {
+        return Err(ParseError::OutOfBounds);
+    }
+    let disk_sectors = disk_size / u64::from(sector_size);
+    if disk_sectors < 3 || data.len() < 512 {
+        return Err(ParseError::OutOfBounds);
+    }
+    if data[510] != 0x55 || data[511] != 0xaa {
+        return Err(ParseError::InvalidMagic);
+    }
+
+    let mut protective: Option<ProtectiveMbr> = None;
+    for index in 0..4 {
+        let offset = 446 + index * 16;
+        let entry = data.get(offset..offset + 16).ok_or(ParseError::OutOfBounds)?;
+        let partition_type = entry[4];
+        if partition_type == 0xee {
+            if protective.is_some() {
+                return Err(ParseError::InvalidBootHeader);
+            }
+            let start = u32::from_le_bytes([entry[8], entry[9], entry[10], entry[11]]);
+            let count = u32::from_le_bytes([entry[12], entry[13], entry[14], entry[15]]);
+            protective = Some(ProtectiveMbr { partition_start_lba: start, partition_sector_count: count });
+        } else if partition_type != 0 {
+            return Err(ParseError::InvalidBootHeader);
+        }
+    }
+
+    let protective = protective.ok_or(ParseError::InvalidBootHeader)?;
+    let expected_count = u32::try_from((disk_sectors - 1).min(u64::from(u32::MAX)))
+        .map_err(|_| ParseError::IntegerOverflow)?;
+    if protective.partition_start_lba != 1 || protective.partition_sector_count != expected_count {
+        return Err(ParseError::InvalidBootHeader);
+    }
+    Ok(protective)
 }
 
 /// Validates the backup GPT header and array against a previously parsed primary GPT.
@@ -388,6 +440,26 @@ mod tests {
         let checksum = crc32_header_with_zeroed_checksum(&header[..GPT_MIN_HEADER_SIZE]);
         put_u32(header, 16, checksum);
         disk
+    }
+
+    #[test]
+    fn validates_protective_mbr_and_rejects_bad_entries() {
+        let mut disk = valid_disk();
+        disk[510] = 0x55;
+        disk[511] = 0xaa;
+        disk[446 + 4] = 0xee;
+        disk[446 + 8..446 + 12].copy_from_slice(&1_u32.to_le_bytes());
+        disk[446 + 12..446 + 16].copy_from_slice(&99_u32.to_le_bytes());
+        assert_eq!(validate_protective_mbr(&disk, 512), Ok(ProtectiveMbr {
+            partition_start_lba: 1,
+            partition_sector_count: 99,
+        }));
+
+        disk[462 + 4] = 0x83;
+        assert_eq!(validate_protective_mbr(&disk, 512), Err(ParseError::InvalidBootHeader));
+        disk[462 + 4] = 0;
+        disk[510] = 0;
+        assert_eq!(validate_protective_mbr(&disk, 512), Err(ParseError::InvalidMagic));
     }
 
     #[test]
