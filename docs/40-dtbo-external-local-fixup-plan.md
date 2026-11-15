@@ -19,7 +19,7 @@
 - 每个 fixup property 必须是非空、4 字节数组，内容是待重定位 property 的字节偏移。
 - 每个 offset 必须 4 字节对齐，且目标 32 位值完整位于对应 property 范围内。
 - 基础树 phandle 必须有效且全局唯一。
-- 以基础树最大 phandle 作为 relocation delta，使用 checked addition 计算新 phandle；溢出、保留值和无效原值均拒绝。
+- 以基础树最大 phandle 作为 relocation delta，使用 checked addition 计算新 phandle；Overlay 节点自身的 `phandle`/`linux,phandle` 声明和 `__local_fixups__` 引用值都必须重定位到相同的新值；溢出、保留值、重复声明和无效原值均拒绝。
 - 计划保留原 phandle 和新 phandle，不修改 DTBO。
 
 ## 4. 资源与安全边界
@@ -35,7 +35,7 @@
 
 实现增加 `FdtOverlayWriteSet`：
 
-- External 与 Local fixup 被转换成绝对字节范围、目标 32 位值和写入类型。
+- External fixup、Local 引用重定位及 Overlay phandle 声明重定位都被转换成绝对字节范围、目标 32 位值和写入类型。
 - 写入集按绝对偏移排序；重复或重叠的 4 字节写入目标拒绝整个计划。
 - 生成写入集时重新验证 property range、offset、输出长度及条目预算。
 - `apply_overlay_fixup_write_set` 在分配输出前验证全部写入，再复制受预算限制的 DTBO 字节并执行写入。
