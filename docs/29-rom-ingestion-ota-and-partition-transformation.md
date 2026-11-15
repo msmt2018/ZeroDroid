@@ -37,6 +37,13 @@ A/B 规范化必须由调用方显式选择 A、B 或 None。None 不推断后�
 
 该目录构建只验证结构和引用关系，不执行分区数据提取、Hash/Hashtree 计算、公钥信任、签名或 rollback index 验证。其 `verification` 状态继承 VBMeta 的 `NotPerformed`，不得作为 Guest 启动放行条件。
 
+
+### 5.2 多份 VBMeta Chain 依赖图（新增）
+
+Rust image core 新增有界 `build_vbmeta_chain_graph`：调用方提供各分区的原始 VBMeta 字节与对应结构索引，解析每个 Chain Partition 描述符并建立父子依赖边。图构建显式接收 SlotSelection、最大节点数和最大边数；节点名称按所选 slot 规范化，重复节点、缺失目标和循环依赖分别报告。循环检测使用迭代式三色 DFS，避免对外部镜像构造的图使用递归调用栈。
+
+若子 VBMeta 已提供，索引器会将 Chain 描述符内的预期公钥字节与子 VBMeta 的 Public Key 区域做逐字节比较，并比较 rollback index location；结果只作为结构一致性诊断。公钥匹配不等于该公钥受设备信任，rollback location 匹配不等于 rollback index 已与设备持久化状态比较。该图仍显式标记 `NotPerformed`，不作为启动放行或 AVB 验证成功依据。当前 Chain 描述符语义仍限 VBMeta v1.0–v1.2，v1.3 新布局未支持。
+
 ## 6. 转换策略
 
 先生成 Transformation Plan，记录输入分区/哈希、操作类型、依赖与兼容依据、输出分区/尺寸/哈希、对 AVB/VINTF/fstab/SELinux/HAL/OTA 的影响、可逆性和恢复方式。
