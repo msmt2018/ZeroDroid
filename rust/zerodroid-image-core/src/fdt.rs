@@ -902,8 +902,8 @@ pub fn plan_overlay_fixups(
                 overlay_property_range: property.value.clone(), property_offset: 0,
                 original_phandle: original, relocated_phandle: relocated,
             });
-            overlay_declared_phandles.push(original);
         }
+        if let Some(value) = node_phandle { overlay_declared_phandles.push(value); }
     }
     overlay_declared_phandles.sort_unstable();
     if overlay_declared_phandles.windows(2).any(|pair| pair[0] == pair[1]) {
