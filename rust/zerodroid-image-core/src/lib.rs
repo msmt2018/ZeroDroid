@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod avb;
+pub mod partition_catalog;
 
 pub mod vendor_boot;
 pub mod gpt;
