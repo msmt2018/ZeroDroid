@@ -783,6 +783,7 @@ pub struct FdtLocalFixup {
 pub struct FdtOverlayFixupPlan {
     pub external: Vec<FdtExternalFixup>,
     pub local: Vec<FdtLocalFixup>,
+    pub declarations: Vec<FdtLocalFixup>,
     pub base_max_phandle: u32,
     pub phandle_delta: u32,
 }
@@ -881,6 +882,33 @@ pub fn plan_overlay_fixups(
     let phandle_delta = base_max_phandle;
     let mut external = Vec::new();
     let mut local = Vec::new();
+    let mut declarations = Vec::new();
+    let mut overlay_declared_phandles = Vec::new();
+    for node in &overlay_index.nodes {
+        let mut node_phandle = None;
+        for property in &node.properties {
+            if property.name != "phandle" && property.name != "linux,phandle" { continue; }
+            let bytes = overlay_data.get(property.value.clone()).ok_or(FdtError::InvalidRange)?;
+            if bytes.len() != 4 { return Err(FdtError::InvalidPhandle); }
+            let original = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+            if original == 0 || original == u32::MAX
+                || node_phandle.is_some_and(|previous| previous != original)
+            { return Err(FdtError::InvalidPhandle); }
+            node_phandle = Some(original);
+            let relocated = original.checked_add(phandle_delta).ok_or(FdtError::InvalidPhandle)?;
+            if relocated == 0 || relocated == u32::MAX { return Err(FdtError::InvalidPhandle); }
+            declarations.push(FdtLocalFixup {
+                overlay_node_path: node.path.clone(), overlay_property: property.name.clone(),
+                overlay_property_range: property.value.clone(), property_offset: 0,
+                original_phandle: original, relocated_phandle: relocated,
+            });
+            overlay_declared_phandles.push(original);
+        }
+    }
+    overlay_declared_phandles.sort_unstable();
+    if overlay_declared_phandles.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(FdtError::DuplicatePhandle);
+    }
 
     if let Some(fixup_node) = node_by_path(overlay_index, "/__fixups__") {
         let symbols = node_by_path(base, "/__symbols__").ok_or(FdtError::MissingSymbols)?;
@@ -977,9 +1005,13 @@ pub fn plan_overlay_fixups(
         let _ = local_root;
     }
 
+    let total_fixups = external.len().checked_add(local.len()).and_then(|n| n.checked_add(declarations.len()))
+        .ok_or(FdtError::IntegerOverflow)?;
+    if total_fixups > budget.max_items as usize { return Err(FdtError::ResourceLimit); }
     Ok(FdtOverlayFixupPlan {
         external,
         local,
+        declarations,
         base_max_phandle,
         phandle_delta,
     })
@@ -1138,6 +1170,7 @@ pub fn build_overlay_fixup_write_set(
     budget.check_input(u64::try_from(overlay_data.len()).map_err(|_| FdtError::IntegerOverflow)?)
         .map_err(|_| FdtError::ResourceLimit)?;
     let total = plan.external.len().checked_add(plan.local.len())
+        .and_then(|n| n.checked_add(plan.declarations.len()))
         .ok_or(FdtError::IntegerOverflow)?;
     if total > budget.max_items as usize {
         return Err(FdtError::ResourceLimit);
@@ -1165,6 +1198,18 @@ pub fn build_overlay_fixup_write_set(
             .ok_or(FdtError::IntegerOverflow)?;
         let end = start.checked_add(4).ok_or(FdtError::IntegerOverflow)?;
         if end > entry.overlay_property_range.end || end > overlay_data.len() {
+            return Err(FdtError::InvalidFixup);
+        }
+        writes.push(FdtFixupWrite {
+            range: start..end,
+            value: entry.relocated_phandle,
+            kind: FdtFixupWriteKind::Local,
+        });
+    }
+    for entry in &plan.declarations {
+        let start = entry.overlay_property_range.start;
+        let end = start.checked_add(4).ok_or(FdtError::IntegerOverflow)?;
+        if entry.overlay_property_range.len() != 4 || end > overlay_data.len() {
             return Err(FdtError::InvalidFixup);
         }
         writes.push(FdtFixupWrite {
@@ -1236,6 +1281,7 @@ mod fixup_write_tests {
                 overlay_property_range: range(16, 4), property_offset: 0,
                 original_phandle: 2, relocated_phandle: 102,
             }],
+            declarations: vec![],
             base_max_phandle: 100, phandle_delta: 100,
         }
     }
