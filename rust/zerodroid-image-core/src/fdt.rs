@@ -1118,6 +1118,8 @@ mod fixup_tests {
         let declaration = &plan.declarations[0];
         let declaration_start = declaration.overlay_property_range.start;
         assert_eq!(be32(&fixed, declaration_start).unwrap(), 102);
+        let local_start = plan.local[0].overlay_property_range.start;
+        assert_eq!(be32(&fixed, local_start).unwrap(), 102);
     }
 
     #[test]
