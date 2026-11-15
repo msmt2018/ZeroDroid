@@ -312,7 +312,7 @@ mod tests {
     #[test]
     fn rejects_block_overflow_and_overlapping_ranges() {
         let mut data = vbmeta();
-        data[12..20].copy_from_slice(&u64::MAX.to_be_bytes());
+        data[12..20].copy_from_slice(&(u64::MAX - 63).to_be_bytes());
         assert_eq!(parse_vbmeta(&data, budget()), Err(AvbParseError::IntegerOverflow));
         let mut data = vbmeta();
         data[48..56].copy_from_slice(&16u64.to_be_bytes());
