@@ -923,3 +923,125 @@ pub fn plan_overlay_fixups(
         phandle_delta,
     })
 }
+
+
+#[cfg(test)]
+mod fixup_tests {
+    use super::*;
+
+    fn node(path: &str, parent: Option<usize>, properties: Vec<FdtProperty>) -> FdtNode {
+        FdtNode {
+            name: path.rsplit('/').next().unwrap_or("").to_owned(),
+            path: path.to_owned(),
+            parent,
+            properties,
+        }
+    }
+
+    fn prop(name: &str, start: usize, len: usize) -> FdtProperty {
+        FdtProperty { name: name.to_owned(), value: start..start + len }
+    }
+
+    fn base_fixture() -> (Vec<u8>, FdtIndex) {
+        let mut data = b"/soc\0".to_vec();
+        data.resize(8, 0);
+        data.extend_from_slice(&7_u32.to_be_bytes());
+        data.extend_from_slice(&100_u32.to_be_bytes());
+        let index = FdtIndex {
+            header: FdtHeader { total_size: 0, version: 17, last_compatible_version: 16,
+                boot_cpuid_phys: 0, structure_size: 0, strings_size: 0 },
+            reservations: Vec::new(),
+            nodes: vec![
+                node("/", None, vec![]),
+                node("/__symbols__", Some(0), vec![prop("clk", 0, 5)]),
+                node("/soc", Some(0), vec![prop("phandle", 8, 4)]),
+                node("/other", Some(0), vec![prop("phandle", 12, 4)]),
+            ],
+            root_compatible: Vec::new(), model: None, structure: 0..0, strings: 0..0,
+        };
+        (data, index)
+    }
+
+    fn overlay_fixture() -> (Vec<u8>, FdtIndex) {
+        let location = b"/fragment@0/__overlay__/dev:clocks:0\0";
+        let mut data = location.to_vec();
+        let external_value = data.len();
+        data.extend_from_slice(&2_u32.to_be_bytes());
+        let local_offset = data.len();
+        data.extend_from_slice(&0_u32.to_be_bytes());
+        let local_value = data.len();
+        data.extend_from_slice(&2_u32.to_be_bytes());
+        let index = FdtIndex {
+            header: FdtHeader { total_size: 0, version: 17, last_compatible_version: 16,
+                boot_cpuid_phys: 0, structure_size: 0, strings_size: 0 },
+            reservations: Vec::new(),
+            nodes: vec![
+                node("/", None, vec![]),
+                node("/__fixups__", Some(0), vec![prop("clk", 0, location.len())]),
+                node("/fragment@0", Some(0), vec![]),
+                node("/fragment@0/__overlay__", Some(2), vec![]),
+                node("/fragment@0/__overlay__/dev", Some(3), vec![
+                    prop("clocks", external_value, 4),
+                    prop("local-ref", local_value, 4),
+                ]),
+                node("/__local_fixups__", Some(0), vec![]),
+                node("/__local_fixups__/fragment@0", Some(5), vec![]),
+                node("/__local_fixups__/fragment@0/__overlay__", Some(6), vec![]),
+                node("/__local_fixups__/fragment@0/__overlay__/dev", Some(7), vec![
+                    prop("local-ref", local_offset, 4),
+                ]),
+            ],
+            root_compatible: Vec::new(), model: None, structure: 0..0, strings: 0..0,
+        };
+        (data, index)
+    }
+
+    fn budget() -> ParseBudget {
+        ParseBudget { max_input_bytes: 4096, max_items: 32, max_nesting_depth: 8 }
+    }
+
+    #[test]
+    fn plans_external_symbol_resolution_and_local_phandle_relocation() {
+        let (base_data, base) = base_fixture();
+        let (overlay_data, overlay) = overlay_fixture();
+        let plan = plan_overlay_fixups(&base_data, &base, &overlay_data, &overlay, budget()).unwrap();
+        assert_eq!(plan.base_max_phandle, 100);
+        assert_eq!(plan.phandle_delta, 100);
+        assert_eq!(plan.external.len(), 1);
+        assert_eq!(plan.external[0].target_node_path, "/soc");
+        assert_eq!(plan.external[0].target_phandle, 7);
+        assert_eq!(plan.external[0].property_offset, 0);
+        assert_eq!(plan.local.len(), 1);
+        assert_eq!(plan.local[0].original_phandle, 2);
+        assert_eq!(plan.local[0].relocated_phandle, 102);
+    }
+
+    #[test]
+    fn rejects_external_fixup_without_base_symbol() {
+        let (base_data, mut base) = base_fixture();
+        base.nodes[1].properties.clear();
+        let (overlay_data, overlay) = overlay_fixture();
+        assert_eq!(
+            plan_overlay_fixups(&base_data, &base, &overlay_data, &overlay, budget()),
+            Err(FdtError::MissingSymbol),
+        );
+    }
+
+    #[test]
+    fn rejects_misaligned_or_out_of_range_local_fixup_offsets() {
+        let (base_data, base) = base_fixture();
+        let (mut overlay_data, mut overlay) = overlay_fixture();
+        overlay_data[overlay.nodes[8].properties[0].value.clone()]
+            .copy_from_slice(&1_u32.to_be_bytes());
+        assert_eq!(
+            plan_overlay_fixups(&base_data, &base, &overlay_data, &overlay, budget()),
+            Err(FdtError::InvalidFixup),
+        );
+        overlay_data[overlay.nodes[8].properties[0].value.clone()]
+            .copy_from_slice(&4_u32.to_be_bytes());
+        assert_eq!(
+            plan_overlay_fixups(&base_data, &base, &overlay_data, &overlay, budget()),
+            Err(FdtError::InvalidFixup),
+        );
+    }
+}
