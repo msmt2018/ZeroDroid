@@ -4,7 +4,7 @@ const SPARSE_MAGIC:u32=0xed26_ff3a;
 const FILE_HEADER_SIZE:usize=28;
 const CHUNK_HEADER_SIZE:usize=12;
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
-pub enum ParseError{OutOfBounds,IntegerOverflow,ResourceLimit,InvalidAlignment,InvalidMagic,UnsupportedVersion,InvalidHeaderSize,InvalidBlockSize,InvalidChunkType,InvalidChunkLength,OutputSizeMismatch}
+pub enum ParseError{OutOfBounds,IntegerOverflow,ResourceLimit,InvalidAlignment,InvalidMagic,UnsupportedVersion,InvalidHeaderSize,InvalidBlockSize,InvalidChunkType,InvalidChunkLength,OutputSizeMismatch,ChecksumMismatch}
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 pub struct ParseBudget{pub max_input_bytes:u64,pub max_items:u32,pub max_nesting_depth:u16}
 impl ParseBudget{
@@ -22,6 +22,19 @@ pub fn checked_align_up(value:u64,alignment:u64)->Result<u64,ParseError>{
 }
 fn u16le(d:&[u8],o:usize)->Result<u16,ParseError>{let b=d.get(o..o.checked_add(2).ok_or(ParseError::IntegerOverflow)?).ok_or(ParseError::OutOfBounds)?;Ok(u16::from_le_bytes([b[0],b[1]]))}
 fn u32le(d:&[u8],o:usize)->Result<u32,ParseError>{let b=d.get(o..o.checked_add(4).ok_or(ParseError::IntegerOverflow)?).ok_or(ParseError::OutOfBounds)?;Ok(u32::from_le_bytes([b[0],b[1],b[2],b[3]]))}
+fn crc32_update(mut crc:u32, bytes:&[u8])->u32{
+ for &byte in bytes{
+  crc^=u32::from(byte);
+  for _ in 0..8{crc=if crc&1!=0{(crc>>1)^0xedb8_8320}else{crc>>1};}
+ }
+ crc
+}
+fn crc32_repeat(mut crc:u32, pattern:&[u8], count:u64)->u32{
+ if pattern.is_empty(){return crc}
+ for i in 0..count{crc=crc32_update(crc,&pattern[(i as usize)%pattern.len()..(i as usize)%pattern.len()+1]);}
+ crc
+}
+
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 pub struct SparseImageHeader{pub major_version:u16,pub minor_version:u16,pub file_header_size:u16,pub chunk_header_size:u16,pub block_size:u32,pub total_blocks:u32,pub total_chunks:u32,pub image_checksum:u32}
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
@@ -47,7 +60,7 @@ pub fn parse_android_sparse_image(data:&[u8],budget:ParseBudget,max_expanded_byt
  let minimum_chunk_bytes=u64::from(h.total_chunks).checked_mul(u64::from(h.chunk_header_size)).ok_or(ParseError::IntegerOverflow)?;
  let remaining=u64::try_from(data.len()-cursor).map_err(|_|ParseError::IntegerOverflow)?;
  if minimum_chunk_bytes>remaining{return Err(ParseError::OutOfBounds)}
- let mut output_blocks=0_u64;
+ let mut output_blocks=0_u64;\n let mut crc_state=!0_u32;
  let mut chunks=Vec::with_capacity(h.total_chunks as usize);
  for _ in 0..h.total_chunks{
   let header_end=cursor.checked_add(usize::from(h.chunk_header_size)).ok_or(ParseError::IntegerOverflow)?;
@@ -58,10 +71,10 @@ pub fn parse_android_sparse_image(data:&[u8],budget:ParseBudget,max_expanded_byt
   let payload_start=header_end;let end=cursor.checked_add(total).ok_or(ParseError::IntegerOverflow)?;
   if end>data.len(){return Err(ParseError::OutOfBounds)}
   let(k,payload,contributes)=match kind{
-   0xcac1=>{let n=u64::from(blocks).checked_mul(u64::from(h.block_size)).ok_or(ParseError::IntegerOverflow)?;let n=usize::try_from(n).map_err(|_|ParseError::IntegerOverflow)?;if total!=usize::from(h.chunk_header_size).checked_add(n).ok_or(ParseError::IntegerOverflow)?{return Err(ParseError::InvalidChunkLength)}(SparseChunkKind::Raw,Some(payload_start..end),true)}
-   0xcac2=>{if total!=usize::from(h.chunk_header_size)+4{return Err(ParseError::InvalidChunkLength)}(SparseChunkKind::Fill,Some(payload_start..end),true)}
-   0xcac3=>{if total!=usize::from(h.chunk_header_size){return Err(ParseError::InvalidChunkLength)}(SparseChunkKind::DontCare,None,true)}
-   0xcac4=>{if blocks!=0||total!=usize::from(h.chunk_header_size)+4{return Err(ParseError::InvalidChunkLength)}(SparseChunkKind::Crc32,Some(payload_start..end),false)}
+   0xcac1=>{let n=u64::from(blocks).checked_mul(u64::from(h.block_size)).ok_or(ParseError::IntegerOverflow)?;let n=usize::try_from(n).map_err(|_|ParseError::IntegerOverflow)?;if total!=usize::from(h.chunk_header_size).checked_add(n).ok_or(ParseError::IntegerOverflow)?{return Err(ParseError::InvalidChunkLength)}crc_state=crc32_update(crc_state,&data[payload_start..end]);(SparseChunkKind::Raw,Some(payload_start..end),true)}
+   0xcac2=>{if total!=usize::from(h.chunk_header_size)+4{return Err(ParseError::InvalidChunkLength)}crc_state=crc32_repeat(crc_state,&data[payload_start..end],u64::from(blocks)*u64::from(h.block_size));(SparseChunkKind::Fill,Some(payload_start..end),true)}
+   0xcac3=>{if total!=usize::from(h.chunk_header_size){return Err(ParseError::InvalidChunkLength)}crc_state=crc32_repeat(crc_state,&[0],u64::from(blocks)*u64::from(h.block_size));(SparseChunkKind::DontCare,None,true)}
+   0xcac4=>{if blocks!=0||total!=usize::from(h.chunk_header_size)+4{return Err(ParseError::InvalidChunkLength)}if u32le(data,payload_start)?!=!crc_state{return Err(ParseError::ChecksumMismatch)}(SparseChunkKind::Crc32,Some(payload_start..end),false)}
    _=>return Err(ParseError::InvalidChunkType)
   };
   let offset=output_blocks;
@@ -69,7 +82,7 @@ pub fn parse_android_sparse_image(data:&[u8],budget:ParseBudget,max_expanded_byt
   chunks.push(SparseChunk{kind:k,output_block_offset:offset,output_block_count:if contributes{blocks}else{0},payload});
   cursor=end;
  }
- if output_blocks!=u64::from(h.total_blocks)||cursor!=data.len(){return Err(ParseError::OutputSizeMismatch)}
+ if output_blocks!=u64::from(h.total_blocks)||cursor!=data.len(){return Err(ParseError::OutputSizeMismatch)}\n if h.image_checksum!=0&&h.image_checksum!=!crc_state{return Err(ParseError::ChecksumMismatch)}
  Ok(SparseImageIndex{header:h,expanded_size_bytes:expanded,chunks})
 }
 #[cfg(test)]
@@ -86,5 +99,20 @@ mod tests{
  #[test]fn fill_and_dont_care_chunks(){let mut v=header(3,2);v.extend_from_slice(&0xcac2_u16.to_le_bytes());v.extend_from_slice(&0_u16.to_le_bytes());v.extend_from_slice(&2_u32.to_le_bytes());v.extend_from_slice(&16_u32.to_le_bytes());v.extend_from_slice(&[1,2,3,4]);v.extend_from_slice(&0xcac3_u16.to_le_bytes());v.extend_from_slice(&0_u16.to_le_bytes());v.extend_from_slice(&1_u32.to_le_bytes());v.extend_from_slice(&12_u32.to_le_bytes());let p=parse_android_sparse_image(&v,budget(),12288).unwrap();assert_eq!(p.chunks[0].kind,SparseChunkKind::Fill);assert_eq!(p.chunks[1].kind,SparseChunkKind::DontCare);assert_eq!(p.chunks[1].output_block_offset,2);}
  #[test]fn rejects_bad_magic_and_truncation(){let mut v=header(0,0);v[0]=0;assert_eq!(parse_android_sparse_image(&v,budget(),0),Err(ParseError::InvalidMagic));let mut v=header(1,1);v.extend_from_slice(&[0xc1,0xca,0,0,1,0,0,0,0xff,0xff,0,0]);assert_eq!(parse_android_sparse_image(&v,budget(),4096),Err(ParseError::OutOfBounds));}
  #[test]fn enforces_output_and_item_budgets(){let mut v=header(1,0);assert_eq!(parse_android_sparse_image(&v,budget(),4095),Err(ParseError::ResourceLimit));v[20..24].copy_from_slice(&129_u32.to_le_bytes());assert_eq!(parse_android_sparse_image(&v,budget(),4096),Err(ParseError::ResourceLimit));}
+ #[test]fn validates_crc32_chunk_and_header_checksum(){
+  let raw=[0x5a_u8;4096];let crc=!crc32_update(!0_u32,&raw);
+  let mut v=header(1,2);v.extend_from_slice(&0xcac1_u16.to_le_bytes());v.extend_from_slice(&0_u16.to_le_bytes());v.extend_from_slice(&1_u32.to_le_bytes());v.extend_from_slice(&4108_u32.to_le_bytes());v.extend_from_slice(&raw);
+  v.extend_from_slice(&0xcac4_u16.to_le_bytes());v.extend_from_slice(&0_u16.to_le_bytes());v.extend_from_slice(&0_u32.to_le_bytes());v.extend_from_slice(&16_u32.to_le_bytes());v.extend_from_slice(&crc.to_le_bytes());
+  v[24..28].copy_from_slice(&crc.to_le_bytes());
+  assert!(parse_android_sparse_image(&v,budget(),4096).is_ok());
+  let last=v.len()-1;v[last]^=1;assert_eq!(parse_android_sparse_image(&v,budget(),4096),Err(ParseError::ChecksumMismatch));
+ }
+ #[test]fn validates_crc_for_fill_and_dont_care(){
+  let mut v=header(2,2);v.extend_from_slice(&0xcac2_u16.to_le_bytes());v.extend_from_slice(&0_u16.to_le_bytes());v.extend_from_slice(&1_u32.to_le_bytes());v.extend_from_slice(&16_u32.to_le_bytes());v.extend_from_slice(&[1,2,3,4]);
+  v.extend_from_slice(&0xcac3_u16.to_le_bytes());v.extend_from_slice(&0_u16.to_le_bytes());v.extend_from_slice(&1_u32.to_le_bytes());v.extend_from_slice(&12_u32.to_le_bytes());
+  let mut expanded=[0_u8;8192];for i in 0..1024{expanded[i*4..i*4+4].copy_from_slice(&[1,2,3,4]);}
+  let expected=!crc32_update(!0_u32,&expanded);v[24..28].copy_from_slice(&expected.to_le_bytes());
+  assert!(parse_android_sparse_image(&v,budget(),8192).is_ok());
+ }
  #[test]fn rejects_output_block_mismatch(){let mut v=header(2,1);v.extend_from_slice(&0xcac3_u16.to_le_bytes());v.extend_from_slice(&0_u16.to_le_bytes());v.extend_from_slice(&1_u32.to_le_bytes());v.extend_from_slice(&12_u32.to_le_bytes());assert_eq!(parse_android_sparse_image(&v,budget(),8192),Err(ParseError::OutputSizeMismatch));}
 }
