@@ -32,6 +32,6 @@ Overlay 执行流水线现已具备。底层仍保留只读 target 解析接口�
 ## 5. 下一步
 
 - 导入真实 dtc/libfdt 生成的 v16/v17 fixture，完成跨实现互操作验证。
-- 完成 DTBO external/local fixup 解析、符号解析与 overlay 应用计划。
+- 导入真实 dtc/libfdt DTB/DTBO fixtures，并对解析、fixup 和应用结果执行跨实现验证。
 - 建立 Guest Platform Profile 的 compatible、CPU、memory、interrupt-controller、timer、GIC、PSCI、UART、VirtIO 节点约束。
 - 将解析结果接入 Boot Material Set，同时继续保持启动链验证状态独立。
