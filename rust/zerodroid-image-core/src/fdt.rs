@@ -312,6 +312,82 @@ pub fn parse_fdt(data: &[u8], budget: ParseBudget) -> Result<FdtIndex, FdtError>
     })
 }
 
+
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FdtOverlayFragment {
+    pub path: String,
+    pub target_phandle: Option<u32>,
+    pub target_path: Option<String>,
+    pub has_overlay_subtree: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FdtOverlayIndex {
+    pub fragments: Vec<FdtOverlayFragment>,
+    pub has_external_fixups: bool,
+    pub has_local_fixups: bool,
+}
+
+/// Exact compatible-string match against a caller-provided Guest platform allow-list.
+/// No fuzzy prefix matching is performed.
+pub fn matches_compatible(index: &FdtIndex, accepted: &[&str]) -> bool {
+    index.root_compatible.iter().any(|value| accepted.iter().any(|candidate| value == candidate))
+}
+
+/// Extracts DTBO fragment routing metadata from an already validated FDT structure.
+/// Applying overlays, resolving symbols/fixups and merging phandles remain separate operations.
+pub fn index_overlay(data: &[u8], index: &FdtIndex, max_fragments: usize) -> Result<FdtOverlayIndex, FdtError> {
+    let mut fragments = Vec::new();
+    for node in &index.nodes {
+        if node.parent != Some(0) || !node.name.starts_with("fragment@") {
+            continue;
+        }
+        if fragments.len() >= max_fragments {
+            return Err(FdtError::ResourceLimit);
+        }
+        let target_phandle = node.properties.iter()
+            .find(|property| property.name == "target")
+            .map(|property| {
+                let bytes = data.get(property.value.clone()).ok_or(FdtError::InvalidRange)?;
+                if bytes.len() != 4 { return Err(FdtError::InvalidStructure); }
+                Ok(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+            }).transpose()?;
+        let target_path = node.properties.iter()
+            .find(|property| property.name == "target-path")
+            .map(|property| {
+                let bytes = data.get(property.value.clone()).ok_or(FdtError::InvalidRange)?;
+                let value = c_string(bytes)?;
+                if value.len() + 1 != bytes.len() || !value.starts_with('/') {
+                    return Err(FdtError::InvalidStructure);
+                }
+                Ok(value.to_owned())
+            }).transpose()?;
+        if target_phandle.is_some() && target_path.is_some() {
+            return Err(FdtError::InvalidStructure);
+        }
+        if target_phandle.is_none() && target_path.is_none() {
+            return Err(FdtError::InvalidStructure);
+        }
+        let overlay_prefix = format!("{}/__overlay__", node.path);
+        let has_overlay_subtree = index.nodes.iter().any(|candidate| {
+            candidate.parent == Some(index.nodes.iter().position(|parent| parent.path == node.path).unwrap_or(usize::MAX))
+                && candidate.path == overlay_prefix
+        });
+        fragments.push(FdtOverlayFragment {
+            path: node.path.clone(),
+            target_phandle,
+            target_path,
+            has_overlay_subtree,
+        });
+    }
+    Ok(FdtOverlayIndex {
+        fragments,
+        has_external_fixups: index.nodes.iter().any(|node| node.path == "/__fixups__"),
+        has_local_fixups: index.nodes.iter().any(|node| node.path == "/__local_fixups__"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,4 +491,21 @@ mod tests {
         data[structure..structure + 4].copy_from_slice(&FDT_END.to_be_bytes());
         assert_eq!(parse_fdt(&data, budget()), Err(FdtError::InvalidStructure));
     }
+
+    #[test]
+    fn matches_compatible_uses_exact_allow_list_entries() {
+        let parsed = parse_fdt(&fixture(), budget()).unwrap();
+        assert!(matches_compatible(&parsed, &["vendor,soc"]));
+        assert!(!matches_compatible(&parsed, &["vendor"]));
+    }
+
+    #[test]
+    fn overlay_index_reports_missing_fragments_without_claiming_application() {
+        let parsed = parse_fdt(&fixture(), budget()).unwrap();
+        let overlay = index_overlay(&fixture(), &parsed, 4).unwrap();
+        assert!(overlay.fragments.is_empty());
+        assert!(!overlay.has_external_fixups);
+        assert!(!overlay.has_local_fixups);
+    }
+
 }
