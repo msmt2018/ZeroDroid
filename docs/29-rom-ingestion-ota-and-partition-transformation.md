@@ -8,7 +8,7 @@
 
 按模块化 Parser 支持 raw partition images、Android Sparse、super.img/liblp、boot/vendor_boot/init_boot/dtbo/vbmeta、OTA payload.bin（全量与增量）、*.new.dat、*.new.dat.br、transfer list、ZIP/TAR 容器，以及有文档或验证依据的厂商 OTA 容器。
 
-格式支持需登记 parser 版本和测试样本。未知格式进入隔离区，不执行包内脚本。
+格式支持需登记 parser 版本和测试样本。未知格式进入隔离区，不执行包内脚本。Rust image core 已提供 boot.img v3/v4 与 vendor_boot v3/v4 的结构索引，并新增独立 init_boot v4 解析入口：init_boot 必须使用 v4 header、Kernel size 必须为 0、ramdisk 必须非空；其 payload 仅以有界 Range 索引，不复制或展开。该解析只证明镜像结构可读，不代表 boot signature、AVB 或 Guest 启动链验证通过。
 
 ## 3. 安全导入流水线
 
