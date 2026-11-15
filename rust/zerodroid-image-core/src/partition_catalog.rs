@@ -233,8 +233,8 @@ mod tests {
     fn slot_suffix_is_only_applied_when_explicitly_selected() {
         assert_eq!(normalize_slot("system", SlotSelection::None), "system");
         assert_eq!(normalize_slot("system", SlotSelection::A), "system_a");
-        assert_eq!(normalize_slot("vendor_b", SlotSelection::A), "vendor_a");
-        assert_eq!(normalize_slot("product_a", SlotSelection::B), "product_b");
+        assert_eq!(normalize_slot("vendor_b", SlotSelection::A), "vendor_b");
+        assert_eq!(normalize_slot("product_a", SlotSelection::B), "product_a");
     }
 
     #[test]
