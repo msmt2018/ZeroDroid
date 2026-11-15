@@ -2000,7 +2000,88 @@ fn clone_overlay_subtree(
 /// Serializes an owned merged tree as a canonical FDT v17 blob and reparses it
 /// before returning. The caller receives no output if structural round-trip
 /// validation or any output budget check fails.
+fn append_owned_preorder(
+    source: &[FdtOwnedNode],
+    old_index: usize,
+    mapping: &mut [Option<usize>],
+    output: &mut Vec<FdtOwnedNode>,
+    depth: usize,
+    budget: ParseBudget,
+) -> Result<(), FdtError> {
+    if depth >= budget.max_nesting_depth as usize {
+        return Err(FdtError::ResourceLimit);
+    }
+    let old = source.get(old_index).ok_or(FdtError::InvalidStructure)?;
+    let new_index = output.len();
+    mapping[old_index] = Some(new_index);
+    let mut node = old.clone();
+    node.parent = match old.parent {
+        Some(parent) => Some(mapping.get(parent).and_then(|value| *value).ok_or(FdtError::InvalidStructure)?),
+        None => None,
+    };
+    output.push(node);
+    for child_index in 0..source.len() {
+        if source[child_index].parent == Some(old_index) {
+            append_owned_preorder(source, child_index, mapping, output, depth + 1, budget)?;
+        }
+    }
+    Ok(())
+}
+
+fn canonicalize_owned_nodes(
+    nodes: &[FdtOwnedNode],
+    budget: ParseBudget,
+) -> Result<Vec<FdtOwnedNode>, FdtError> {
+    if nodes.is_empty() || nodes.len() > budget.max_items as usize
+        || nodes[0].name != "" || nodes[0].path != "/" || nodes[0].parent.is_some()
+    {
+        return Err(FdtError::InvalidStructure);
+    }
+    for (index, node) in nodes.iter().enumerate() {
+        if node.name.as_bytes().contains(&0)
+            || (index > 0 && (node.name.is_empty() || node.name.contains('/')))
+        {
+            return Err(FdtError::InvalidStructure);
+        }
+        if index > 0 {
+            let parent = node.parent.ok_or(FdtError::InvalidStructure)?;
+            if parent >= index || parent >= nodes.len() {
+                return Err(FdtError::InvalidStructure);
+            }
+            let expected = if nodes[parent].path == "/" {
+                format!("/{}", node.name)
+            } else {
+                format!("{}/{}", nodes[parent].path, node.name)
+            };
+            if expected != node.path || nodes[..index].iter()
+                .any(|prior| prior.parent == Some(parent) && prior.name == node.name)
+            {
+                return Err(FdtError::InvalidStructure);
+            }
+        }
+    }
+    let mut mapping = vec![None; nodes.len()];
+    let mut ordered = Vec::with_capacity(nodes.len());
+    append_owned_preorder(nodes, 0, &mut mapping, &mut ordered, 0, budget)?;
+    if ordered.len() != nodes.len() || mapping.iter().any(Option::is_none) {
+        return Err(FdtError::InvalidStructure);
+    }
+    Ok(ordered)
+}
+
+/// Serializes a valid owned tree in canonical depth-first node order.
+/// Merge operations may append a child after later siblings; canonicalization
+/// remaps parent indexes before emitting FDT's required depth-first token stream.
 pub fn serialize_fdt_v17(
+    tree: &FdtMergedTree,
+    budget: ParseBudget,
+) -> Result<Vec<u8>, FdtError> {
+    let mut canonical_tree = tree.clone();
+    canonical_tree.nodes = canonicalize_owned_nodes(&tree.nodes, budget)?;
+    serialize_fdt_v17_canonical(&canonical_tree, budget)
+}
+
+fn serialize_fdt_v17_canonical(
     tree: &FdtMergedTree,
     budget: ParseBudget,
 ) -> Result<Vec<u8>, FdtError> {
