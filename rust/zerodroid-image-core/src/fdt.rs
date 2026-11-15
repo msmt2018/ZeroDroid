@@ -1326,7 +1326,39 @@ pub fn merge_overlay_fragments(
         }
     }
 
-    let mut item_count = nodes.len();
+    let base_property_count = nodes.iter().try_fold(0usize, |count, node| {
+        count.checked_add(node.properties.len()).ok_or(FdtError::IntegerOverflow)
+    })?;
+    let mut item_count = nodes.len().checked_add(base_property_count)
+        .ok_or(FdtError::IntegerOverflow)?;
+    if item_count > budget.max_items as usize {
+        return Err(FdtError::ResourceLimit);
+    }
+
+    // Reject malformed or ambiguous overlay topology before recursive merging.
+    let mut overlay_depths = vec![0usize; overlay.nodes.len()];
+    for (index, node) in overlay.nodes.iter().enumerate() {
+        if index == 0 {
+            if node.path != "/" || node.parent.is_some() {
+                return Err(FdtError::InvalidStructure);
+            }
+            continue;
+        }
+        let parent = node.parent.ok_or(FdtError::InvalidStructure)?;
+        if parent >= index || parent >= overlay.nodes.len() {
+            return Err(FdtError::InvalidStructure);
+        }
+        overlay_depths[index] = overlay_depths[parent].checked_add(1)
+            .ok_or(FdtError::IntegerOverflow)?;
+        if overlay_depths[index] > budget.max_nesting_depth as usize
+            || overlay.nodes[..index].iter().any(|prior| {
+                prior.parent == Some(parent) && prior.name == node.name
+            })
+        {
+            return Err(FdtError::InvalidStructure);
+        }
+    }
+
     for resolution in resolutions {
         let fragment_index = overlay.nodes.iter().position(|node| node.path == resolution.fragment_path)
             .ok_or(FdtError::MissingOverlayTarget)?;
