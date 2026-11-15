@@ -4,7 +4,7 @@
 
 `zerodroid-image-core::fdt` 提供有界、只读的 Flattened Device Tree 解析。输入 DTB/DTBO 的 property payload 不复制，节点和属性保留索引与原始输入范围。
 
-当前严格接受 FDT v17 header。旧版本 header 的结构大小字段语义不同，暂不猜测或套用 v17 解释。
+解析器现在分别处理 FDT v16 与 v17 header：v17 使用 `size_dt_struct`，v16 不读取该字段，而是按 token 边界扫描到 `FDT_END` 推导 structure block 长度。两种版本共用后续结构校验，但不会混用 header 布局。
 
 ## 2. 校验
 
@@ -31,7 +31,7 @@
 
 ## 5. 下一步
 
-- 支持 FDT v16 header 的独立兼容解析路径（不能复用 v17 header layout）。
+- 导入真实 dtc/libfdt 生成的 v16/v17 fixture，完成跨实现互操作验证。
 - 完成 DTBO external/local fixup 解析、符号解析与 overlay 应用计划。
 - 建立 Guest Platform Profile 的 compatible、CPU、memory、interrupt-controller、timer、GIC、PSCI、UART、VirtIO 节点约束。
 - 将解析结果接入 Boot Material Set，同时继续保持启动链验证状态独立。
