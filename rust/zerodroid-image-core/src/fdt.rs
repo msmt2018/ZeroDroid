@@ -1256,6 +1256,7 @@ pub struct FdtOwnedNode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FdtMergedTree {
     pub reservations: Vec<FdtReservation>,
+    pub boot_cpuid_phys: u32,
     pub nodes: Vec<FdtOwnedNode>,
     pub root_compatible: Vec<String>,
     pub model: Option<String>,
@@ -1418,6 +1419,7 @@ pub fn merge_overlay_fragments(
 
     Ok(FdtMergedTree {
         reservations: base.reservations.clone(),
+        boot_cpuid_phys: base.header.boot_cpuid_phys,
         nodes,
         root_compatible: compatible,
         model,
@@ -1530,4 +1532,252 @@ fn clone_overlay_subtree(
         )?;
     }
     Ok(index)
+}
+
+
+/// Serializes an owned merged tree as a canonical FDT v17 blob and reparses it
+/// before returning. The caller receives no output if structural round-trip
+/// validation or any output budget check fails.
+pub fn serialize_fdt_v17(
+    tree: &FdtMergedTree,
+    budget: ParseBudget,
+) -> Result<Vec<u8>, FdtError> {
+    if tree.nodes.is_empty() || tree.nodes.len() > budget.max_items as usize {
+        return Err(FdtError::ResourceLimit);
+    }
+    if tree.nodes[0].name != "" || tree.nodes[0].path != "/" || tree.nodes[0].parent.is_some() {
+        return Err(FdtError::InvalidStructure);
+    }
+
+    let mut item_count = tree.nodes.len();
+    let mut string_names: Vec<String> = Vec::new();
+    let mut property_bytes = 0usize;
+    for (index, node) in tree.nodes.iter().enumerate() {
+        if node.name.as_bytes().contains(&0) || (index > 0 && (node.name.is_empty() || node.name.contains('/'))) {
+            return Err(FdtError::InvalidStructure);
+        }
+        if index > 0 {
+            let parent = node.parent.ok_or(FdtError::InvalidStructure)?;
+            if parent >= index || parent >= tree.nodes.len() {
+                return Err(FdtError::InvalidStructure);
+            }
+            let expected = if tree.nodes[parent].path == "/" {
+                format!("/{}", node.name)
+            } else {
+                format!("{}/{}", tree.nodes[parent].path, node.name)
+            };
+            if expected != node.path {
+                return Err(FdtError::InvalidStructure);
+            }
+            if tree.nodes[..index].iter().any(|prior| prior.parent == Some(parent) && prior.name == node.name) {
+                return Err(FdtError::InvalidStructure);
+            }
+        }
+        for (property_index, property) in node.properties.iter().enumerate() {
+            if property.name.is_empty() || property.name.as_bytes().contains(&0)
+                || node.properties[..property_index].iter().any(|prior| prior.name == property.name)
+            {
+                return Err(FdtError::InvalidStructure);
+            }
+            item_count = item_count.checked_add(1).ok_or(FdtError::IntegerOverflow)?;
+            property_bytes = property_bytes.checked_add(property.value.len()).ok_or(FdtError::IntegerOverflow)?;
+            if !string_names.iter().any(|name| name == &property.name) {
+                string_names.push(property.name.clone());
+            }
+        }
+    }
+    if item_count > budget.max_items as usize
+        || property_bytes > budget.max_input_bytes as usize
+        || tree.reservations.len().checked_add(item_count).ok_or(FdtError::IntegerOverflow)?
+            > budget.max_items as usize
+    {
+        return Err(FdtError::ResourceLimit);
+    }
+    for reservation in &tree.reservations {
+        if reservation.size == 0 || reservation.address.checked_add(reservation.size).is_none() {
+            return Err(FdtError::InvalidReservationMap);
+        }
+    }
+
+    let mut strings = Vec::new();
+    let mut name_offsets = Vec::with_capacity(string_names.len());
+    for name in &string_names {
+        let offset = u32::try_from(strings.len()).map_err(|_| FdtError::IntegerOverflow)?;
+        name_offsets.push((name.clone(), offset));
+        strings.extend_from_slice(name.as_bytes());
+        strings.push(0);
+    }
+
+    let mut structure = Vec::new();
+    emit_owned_node(tree, 0, &name_offsets, &mut structure, 0, budget)?;
+    structure.extend_from_slice(&FDT_END.to_be_bytes());
+
+    let reservation_bytes = tree.reservations.len().checked_add(1)
+        .and_then(|count| count.checked_mul(16)).ok_or(FdtError::IntegerOverflow)?;
+    let reserve_offset = FDT_HEADER_SIZE;
+    let structure_offset = reserve_offset.checked_add(reservation_bytes)
+        .ok_or(FdtError::IntegerOverflow)?;
+    let strings_offset = structure_offset.checked_add(structure.len())
+        .ok_or(FdtError::IntegerOverflow)?;
+    let total_size = strings_offset.checked_add(strings.len())
+        .ok_or(FdtError::IntegerOverflow)?;
+    if total_size > budget.max_input_bytes as usize {
+        return Err(FdtError::ResourceLimit);
+    }
+
+    let mut output = vec![0_u8; FDT_HEADER_SIZE];
+    output[0..4].copy_from_slice(&FDT_MAGIC.to_be_bytes());
+    output[4..8].copy_from_slice(&u32::try_from(total_size).map_err(|_| FdtError::IntegerOverflow)?.to_be_bytes());
+    output[8..12].copy_from_slice(&u32::try_from(structure_offset).map_err(|_| FdtError::IntegerOverflow)?.to_be_bytes());
+    output[12..16].copy_from_slice(&u32::try_from(strings_offset).map_err(|_| FdtError::IntegerOverflow)?.to_be_bytes());
+    output[16..20].copy_from_slice(&u32::try_from(reserve_offset).map_err(|_| FdtError::IntegerOverflow)?.to_be_bytes());
+    output[20..24].copy_from_slice(&17_u32.to_be_bytes());
+    output[24..28].copy_from_slice(&16_u32.to_be_bytes());
+    output[28..32].copy_from_slice(&tree.boot_cpuid_phys.to_be_bytes());
+    output[32..36].copy_from_slice(&u32::try_from(strings.len()).map_err(|_| FdtError::IntegerOverflow)?.to_be_bytes());
+    output[36..40].copy_from_slice(&u32::try_from(structure.len()).map_err(|_| FdtError::IntegerOverflow)?.to_be_bytes());
+    for reservation in &tree.reservations {
+        output.extend_from_slice(&reservation.address.to_be_bytes());
+        output.extend_from_slice(&reservation.size.to_be_bytes());
+    }
+    output.extend_from_slice(&[0_u8; 16]);
+    output.extend_from_slice(&structure);
+    output.extend_from_slice(&strings);
+
+    let reparsed = parse_fdt(&output, budget)?;
+    if reparsed.nodes.len() != tree.nodes.len()
+        || reparsed.reservations != tree.reservations
+        || reparsed.header.boot_cpuid_phys != tree.boot_cpuid_phys
+    {
+        return Err(FdtError::InvalidStructure);
+    }
+    for (parsed, owned) in reparsed.nodes.iter().zip(&tree.nodes) {
+        if parsed.name != owned.name || parsed.path != owned.path || parsed.parent != owned.parent
+            || parsed.properties.len() != owned.properties.len()
+        {
+            return Err(FdtError::InvalidStructure);
+        }
+        for (parsed_property, owned_property) in parsed.properties.iter().zip(&owned.properties) {
+            if parsed_property.name != owned_property.name
+                || output.get(parsed_property.value.clone()) != Some(owned_property.value.as_slice())
+            {
+                return Err(FdtError::InvalidStructure);
+            }
+        }
+    }
+    Ok(output)
+}
+
+fn emit_owned_node(
+    tree: &FdtMergedTree,
+    node_index: usize,
+    name_offsets: &[(String, u32)],
+    structure: &mut Vec<u8>,
+    depth: usize,
+    budget: ParseBudget,
+) -> Result<(), FdtError> {
+    if depth > budget.max_nesting_depth as usize {
+        return Err(FdtError::ResourceLimit);
+    }
+    let node = tree.nodes.get(node_index).ok_or(FdtError::InvalidStructure)?;
+    structure.extend_from_slice(&FDT_BEGIN_NODE.to_be_bytes());
+    structure.extend_from_slice(node.name.as_bytes());
+    structure.push(0);
+    while structure.len() % 4 != 0 { structure.push(0); }
+
+    for property in &node.properties {
+        let name_offset = name_offsets.iter().find(|(name, _)| name == &property.name)
+            .map(|(_, offset)| *offset).ok_or(FdtError::InvalidStringTable)?;
+        structure.extend_from_slice(&FDT_PROP.to_be_bytes());
+        structure.extend_from_slice(&u32::try_from(property.value.len())
+            .map_err(|_| FdtError::IntegerOverflow)?.to_be_bytes());
+        structure.extend_from_slice(&name_offset.to_be_bytes());
+        structure.extend_from_slice(&property.value);
+        while structure.len() % 4 != 0 { structure.push(0); }
+        if structure.len() > budget.max_input_bytes as usize {
+            return Err(FdtError::ResourceLimit);
+        }
+    }
+
+    for (child_index, child) in tree.nodes.iter().enumerate()
+        .filter(|(_, candidate)| candidate.parent == Some(node_index))
+    {
+        let _ = child;
+        emit_owned_node(tree, child_index, name_offsets, structure, depth + 1, budget)?;
+    }
+    structure.extend_from_slice(&FDT_END_NODE.to_be_bytes());
+    if structure.len() > budget.max_input_bytes as usize {
+        return Err(FdtError::ResourceLimit);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod fdt_serializer_tests {
+    use super::*;
+
+    fn budget() -> ParseBudget {
+        ParseBudget { max_input_bytes: 16 * 1024, max_items: 128, max_nesting_depth: 16 }
+    }
+
+    fn tree() -> FdtMergedTree {
+        FdtMergedTree {
+            reservations: vec![FdtReservation { address: 0x8000_0000, size: 0x1000 }],
+            boot_cpuid_phys: 3,
+            nodes: vec![
+                FdtOwnedNode {
+                    name: String::new(), path: "/".to_owned(), parent: None,
+                    properties: vec![
+                        FdtOwnedProperty { name: "compatible".to_owned(), value: b"vendor,board\0".to_vec() },
+                        FdtOwnedProperty { name: "#address-cells".to_owned(), value: 2_u32.to_be_bytes().to_vec() },
+                    ],
+                },
+                FdtOwnedNode {
+                    name: "soc".to_owned(), path: "/soc".to_owned(), parent: Some(0),
+                    properties: vec![
+                        FdtOwnedProperty { name: "status".to_owned(), value: b"okay\0".to_vec() },
+                    ],
+                },
+                FdtOwnedNode {
+                    name: "uart@1000".to_owned(), path: "/soc/uart@1000".to_owned(), parent: Some(1),
+                    properties: vec![
+                        FdtOwnedProperty { name: "reg".to_owned(), value: vec![0, 0, 0x10, 0] },
+                    ],
+                },
+            ],
+            root_compatible: vec!["vendor,board".to_owned()],
+            model: None,
+        }
+    }
+
+    #[test]
+    fn serializes_and_round_trips_tree_and_reservations() {
+        let tree = tree();
+        let output = serialize_fdt_v17(&tree, budget()).unwrap();
+        let parsed = parse_fdt(&output, budget()).unwrap();
+        assert_eq!(parsed.nodes.len(), 3);
+        assert_eq!(parsed.nodes[2].path, "/soc/uart@1000");
+        assert_eq!(parsed.reservations, tree.reservations);
+        assert_eq!(parsed.header.boot_cpuid_phys, 3);
+        assert_eq!(parsed.root_compatible, vec!["vendor,board"]);
+    }
+
+    #[test]
+    fn rejects_invalid_topology_and_budget_before_output() {
+        let mut invalid = tree();
+        invalid.nodes[2].parent = Some(99);
+        assert_eq!(serialize_fdt_v17(&invalid, budget()), Err(FdtError::InvalidStructure));
+        let mut small = budget();
+        small.max_input_bytes = 64;
+        assert_eq!(serialize_fdt_v17(&tree(), small), Err(FdtError::ResourceLimit));
+    }
+
+    #[test]
+    fn rejects_duplicate_property_names() {
+        let mut invalid = tree();
+        invalid.nodes[0].properties.push(FdtOwnedProperty {
+            name: "compatible".to_owned(), value: b"duplicate\0".to_vec(),
+        });
+        assert_eq!(serialize_fdt_v17(&invalid, budget()), Err(FdtError::InvalidStructure));
+    }
 }
