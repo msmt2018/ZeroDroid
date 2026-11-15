@@ -555,10 +555,10 @@ mod tests {
         data.resize(256 + 64 + 256, 0);
         data[20..28].copy_from_slice(&256u64.to_be_bytes());
         data[96..104].copy_from_slice(&48u64.to_be_bytes());
-        data[104..112].copy_from_slice(&184u64.to_be_bytes());
+        data[104..112].copy_from_slice(&196u64.to_be_bytes());
         let start = 368usize;
         data[start..start + 8].copy_from_slice(&1u64.to_be_bytes());
-        data[start + 8..start + 16].copy_from_slice(&168u64.to_be_bytes());
+        data[start + 8..start + 16].copy_from_slice(&180u64.to_be_bytes());
         let body = start + 16;
         data[body..body + 4].copy_from_slice(&1u32.to_be_bytes());
         data[body + 4..body + 12].copy_from_slice(&4096u64.to_be_bytes());
@@ -593,10 +593,10 @@ mod tests {
         data.resize(256 + 64 + 256, 0);
         data[20..28].copy_from_slice(&256u64.to_be_bytes());
         data[96..104].copy_from_slice(&48u64.to_be_bytes());
-        data[104..112].copy_from_slice(&96u64.to_be_bytes());
+        data[104..112].copy_from_slice(&100u64.to_be_bytes());
         let start = 368usize;
         data[start..start + 8].copy_from_slice(&4u64.to_be_bytes());
-        data[start + 8..start + 16].copy_from_slice(&80u64.to_be_bytes());
+        data[start + 8..start + 16].copy_from_slice(&84u64.to_be_bytes());
         let body = start + 16;
         data[body..body + 4].copy_from_slice(&3u32.to_be_bytes());
         data[body + 4..body + 8].copy_from_slice(&4u32.to_be_bytes());
