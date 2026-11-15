@@ -62,7 +62,7 @@ pub fn apply_dtbo_sequence(
 ## 已覆盖的内部回归测试
 
 - FDT v16 header 独立解析及 structure 长度推导。
-- FDT v17 serializer round-trip。
+- FDT v17 serializer round-trip，并在序列化前将合并后的 owned nodes 规范化为深度优先顺序、重映射 parent 索引，避免新增节点追加位置破坏合法树的输出顺序。
 - phandle 声明和 local 引用同步 relocation。
 - external symbol fixup、写入冲突和边界拒绝。
 - reservation map 去重、排序和重叠拒绝。
