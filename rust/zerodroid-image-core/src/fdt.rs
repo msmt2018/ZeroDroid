@@ -2434,6 +2434,40 @@ mod overlay_merge_pipeline_tests {
     }
 
     #[test]
+    fn applies_real_dtc_generated_external_local_fixups_and_symbols() {
+        if std::env::var_os("ZERODROID_DTC_FIXTURES").is_none() {
+            return;
+        }
+        let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures-generated");
+        let base = std::fs::read(fixture_dir.join("base.dtb"))
+            .expect("CI must generate base.dtb with dtc -@");
+        let overlay = std::fs::read(fixture_dir.join("overlay.dtbo"))
+            .expect("CI must generate overlay.dtbo with dtc -@");
+        let output = apply_dtbo_sequence(&base, &[&overlay], budget()).unwrap();
+        let parsed = parse_fdt(&output, budget()).unwrap();
+        let serial = parsed.nodes.iter()
+            .find(|node| node.path == "/soc/serial@1000").unwrap();
+        let child = parsed.nodes.iter()
+            .find(|node| node.path == "/soc/serial@1000/child@0").unwrap();
+        let read = |node: &FdtNode, name: &str| {
+            let property = node.properties.iter().find(|p| p.name == name).unwrap();
+            be32(&output, property.value.start).unwrap()
+        };
+        let serial_phandle = read(serial, "phandle");
+        let child_phandle = read(child, "phandle");
+        assert_ne!(serial_phandle, child_phandle);
+        assert_eq!(read(child, "remote"), serial_phandle);
+        assert_eq!(read(child, "self"), child_phandle);
+        let symbols = parsed.nodes.iter().find(|node| node.path == "/__symbols__").unwrap();
+        let child_symbol = symbols.properties.iter().find(|p| p.name == "child0").unwrap();
+        assert_eq!(
+            c_string(&output[child_symbol.value.clone()]).unwrap(),
+            "/soc/serial@1000/child@0",
+        );
+    }
+
+    #[test]
     fn raw_dtbo_sequence_runs_fixup_resolve_merge_and_serialization_pipeline() {
         let base_tree = FdtMergedTree {
             reservations: vec![], boot_cpuid_phys: 0,
