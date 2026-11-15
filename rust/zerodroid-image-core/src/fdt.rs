@@ -163,6 +163,9 @@ pub fn parse_fdt(data: &[u8], budget: ParseBudget) -> Result<FdtIndex, FdtError>
     }
     let struct_range = checked_block(be32(data, 8)?, header.structure_size, total)?;
     let strings_range = checked_block(be32(data, 12)?, header.strings_size, total)?;
+    if struct_range.start % 4 != 0 || header.structure_size % 4 != 0 {
+        return Err(FdtError::InvalidHeader);
+    }
     let reserve_start = usize::try_from(be32(data, 16)?).map_err(|_| FdtError::IntegerOverflow)?;
     if reserve_start < FDT_HEADER_SIZE || reserve_start % 8 != 0 || reserve_start >= total {
         return Err(FdtError::InvalidReservationMap);
@@ -170,10 +173,12 @@ pub fn parse_fdt(data: &[u8], budget: ParseBudget) -> Result<FdtIndex, FdtError>
     let mut reservations = Vec::new();
     let mut reserve_cursor = reserve_start;
     loop {
+        let record_end = reserve_cursor.checked_add(16).ok_or(FdtError::IntegerOverflow)?;
+        if record_end > total { return Err(FdtError::InvalidReservationMap); }
         let address = be64(data, reserve_cursor).map_err(|_| FdtError::InvalidReservationMap)?;
         let size_offset = reserve_cursor.checked_add(8).ok_or(FdtError::IntegerOverflow)?;
         let size = be64(data, size_offset).map_err(|_| FdtError::InvalidReservationMap)?;
-        reserve_cursor = reserve_cursor.checked_add(16).ok_or(FdtError::IntegerOverflow)?;
+        reserve_cursor = record_end;
         if address == 0 && size == 0 {
             break;
         }
@@ -201,12 +206,14 @@ pub fn parse_fdt(data: &[u8], budget: ParseBudget) -> Result<FdtIndex, FdtError>
     let mut stack: Vec<usize> = Vec::new();
     let mut saw_root = false;
     let mut saw_end = false;
+    let mut item_count = reservations.len();
     while cursor < structure.len() {
         let token = be32(structure, cursor)?;
         cursor = cursor.checked_add(4).ok_or(FdtError::IntegerOverflow)?;
         match token {
             FDT_BEGIN_NODE => {
-                if saw_end || nodes.len() >= budget.max_items as usize
+                item_count = item_count.checked_add(1).ok_or(FdtError::IntegerOverflow)?;
+                if saw_end || item_count > budget.max_items as usize
                     || stack.len() >= budget.max_nesting_depth as usize
                 {
                     return Err(FdtError::ResourceLimit);
@@ -257,6 +264,8 @@ pub fn parse_fdt(data: &[u8], budget: ParseBudget) -> Result<FdtIndex, FdtError>
                     return Err(FdtError::Truncated);
                 }
                 let name = read_string(strings, name_offset)?;
+                item_count = item_count.checked_add(1).ok_or(FdtError::IntegerOverflow)?;
+                if item_count > budget.max_items as usize { return Err(FdtError::ResourceLimit); }
                 if nodes[node_index].properties.iter().any(|p| p.name == name) {
                     return Err(FdtError::InvalidStructure);
                 }
