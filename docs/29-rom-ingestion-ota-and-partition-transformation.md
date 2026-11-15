@@ -24,7 +24,7 @@ payload.bin 可能是增量 OTA，不能保证仅凭包内数据重建完整分�
 
 ## 5. Sparse、LP 与分区映射
 
-Sparse 转换保留逻辑块数量、块大小和填充语义；liblp 解析识别 metadata slot、group、partition attributes、extent、block device 和动态分区约束；重组前检查分区总量、group 上限、super 容量、slot 与 metadata 一致性。
+Sparse 转换保留逻辑块数量、块大小和填充语义；liblp parser 已实现 geometry/header/table SHA-256 校验、metadata slot 主备副本读取、group、partition attributes、extent、block device 和映射边界/容量约束索引；后续仍需补充 A/B slot 语义规范化、retrofit slot suffix 调整、snapshot/COW 语义与实际 super 镜像回归样本；重组前检查分区总量、group 上限、super 容量、slot 与 metadata 一致性。
 
 不将 super.img 当作单一文件系统，不假设所有厂商分区都在 super 中；未知厂商分区名称应保留元数据，不得擅自删除。
 
