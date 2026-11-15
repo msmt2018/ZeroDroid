@@ -18,6 +18,8 @@ Sparse CRC32 is calculated over the logical expanded byte stream, including zero
 
 CRC32 validation now covers RAW, FILL and DONT_CARE expanded bytes, optional per-chunk CRC32 checkpoints, and the optional file-header checksum. This remains a bounded in-memory parser/indexer: it does not write expanded images, verify AVB/VBMeta, or validate LP metadata. The caller must choose conservative input and expanded-size budgets.
 
+VBMeta parsing validates the AVB0 header, supported required version, authentication/auxiliary block bounds, section overlap, descriptor TLV framing and descriptor/input budgets. It indexes digest/signature/key/metadata/descriptor ranges only; cryptographic verification and descriptor-specific semantics are intentionally not claimed.
+
 Vendor boot parsing validates the page-size alignment, required ramdisk/DTB sections, v4 table geometry, per-entry fragment bounds and overlap, and total payload budget. It does not interpret DTB contents, select fragments for a particular board, validate bootconfig semantics, or perform AVB authentication.
 
 GPT support parses the primary header at LBA 1, validates the backup header at the final LBA and requires reciprocal header fields plus byte-identical partition arrays. Protective MBR validation checks the 0x55AA signature and exactly one correctly sized 0xEE entry. Filesystem probing and image writes are not implemented.
