@@ -269,6 +269,151 @@ pub fn parse_vendor_boot_image_v3_v4(
     })
 }
 
+
+
+/// Semantic role of a range borrowed from one of the boot-chain images.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootMaterialKind {
+    Kernel,
+    BootRamdisk,
+    BootSignature,
+    InitRamdisk,
+    InitBootSignature,
+    VendorRamdisk,
+    DeviceTreeBlob,
+    VendorRamdiskTable,
+    Bootconfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootMaterialSource {
+    BootImage,
+    InitBootImage,
+    VendorBootImage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootMaterialEntry {
+    pub kind: BootMaterialKind,
+    pub source: BootMaterialSource,
+    /// Byte range into the caller-owned source image; no payload is copied.
+    pub range: Range<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootMaterialError {
+    ResourceLimit,
+    InvalidImageIndex,
+    MissingKernel,
+    MissingBootRamdisk,
+    InvalidInitBootSemantics,
+}
+
+/// A bounded, range-only join of already parsed Android boot-chain images.
+/// This is an inventory, not a signature, AVB, DTB, or bootability verdict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootMaterialSet {
+    pub entries: Vec<BootMaterialEntry>,
+    pub has_init_boot: bool,
+    pub has_vendor_boot: bool,
+    pub has_device_tree: bool,
+    /// Always false until the complete boot chain and trust policy are verified.
+    pub boot_chain_verified: bool,
+}
+
+fn push_material(
+    entries: &mut Vec<BootMaterialEntry>,
+    kind: BootMaterialKind,
+    source: BootMaterialSource,
+    range: Range<usize>,
+    image_len: usize,
+    max_entries: usize,
+) -> Result<(), BootMaterialError> {
+    if range.start > range.end || range.end > image_len {
+        return Err(BootMaterialError::InvalidImageIndex);
+    }
+    if entries.len() >= max_entries {
+        return Err(BootMaterialError::ResourceLimit);
+    }
+    entries.push(BootMaterialEntry { kind, source, range });
+    Ok(())
+}
+
+/// Joins boot.img with optional init_boot.img and vendor_boot.img indexes.
+/// Every range is rechecked against the exact source byte slice supplied by the caller.
+/// Callers must keep those immutable slices alive while consuming the returned ranges.
+pub fn build_boot_material_set(
+    boot_data: &[u8],
+    boot: &crate::AndroidBootImageIndex,
+    init_boot: Option<(&[u8], &crate::InitBootImageIndex)>,
+    vendor_boot: Option<(&[u8], &VendorBootImageIndex)>,
+    max_entries: usize,
+) -> Result<BootMaterialSet, BootMaterialError> {
+    if boot.header.kernel_size == 0 {
+        return Err(BootMaterialError::MissingKernel);
+    }
+    if boot.header.ramdisk_size == 0 {
+        return Err(BootMaterialError::MissingBootRamdisk);
+    }
+    if boot.total_indexed_bytes > boot_data.len() as u64 {
+        return Err(BootMaterialError::InvalidImageIndex);
+    }
+
+    let mut entries = Vec::new();
+    push_material(&mut entries, BootMaterialKind::Kernel, BootMaterialSource::BootImage,
+        boot.kernel.clone(), boot_data.len(), max_entries)?;
+    push_material(&mut entries, BootMaterialKind::BootRamdisk, BootMaterialSource::BootImage,
+        boot.ramdisk.clone(), boot_data.len(), max_entries)?;
+    if let Some(range) = &boot.boot_signature {
+        push_material(&mut entries, BootMaterialKind::BootSignature, BootMaterialSource::BootImage,
+            range.clone(), boot_data.len(), max_entries)?;
+    }
+
+    if let Some((data, index)) = init_boot {
+        if index.header.header_version != 4 || index.header.kernel_size != 0 || index.header.ramdisk_size == 0 {
+            return Err(BootMaterialError::InvalidInitBootSemantics);
+        }
+        if index.total_indexed_bytes > data.len() as u64 {
+            return Err(BootMaterialError::InvalidImageIndex);
+        }
+        push_material(&mut entries, BootMaterialKind::InitRamdisk, BootMaterialSource::InitBootImage,
+            index.ramdisk.clone(), data.len(), max_entries)?;
+        if let Some(range) = &index.boot_signature {
+            push_material(&mut entries, BootMaterialKind::InitBootSignature, BootMaterialSource::InitBootImage,
+                range.clone(), data.len(), max_entries)?;
+        }
+    }
+
+    let has_device_tree = if let Some((data, index)) = vendor_boot {
+        if index.total_indexed_bytes > data.len() as u64 {
+            return Err(BootMaterialError::InvalidImageIndex);
+        }
+        push_material(&mut entries, BootMaterialKind::VendorRamdisk, BootMaterialSource::VendorBootImage,
+            index.vendor_ramdisk.clone(), data.len(), max_entries)?;
+        push_material(&mut entries, BootMaterialKind::DeviceTreeBlob, BootMaterialSource::VendorBootImage,
+            index.dtb.clone(), data.len(), max_entries)?;
+        if let Some(range) = &index.vendor_ramdisk_table {
+            push_material(&mut entries, BootMaterialKind::VendorRamdiskTable, BootMaterialSource::VendorBootImage,
+                range.clone(), data.len(), max_entries)?;
+        }
+        if let Some(range) = &index.bootconfig {
+            push_material(&mut entries, BootMaterialKind::Bootconfig, BootMaterialSource::VendorBootImage,
+                range.clone(), data.len(), max_entries)?;
+        }
+        true
+    } else {
+        false
+    };
+
+    Ok(BootMaterialSet {
+        entries,
+        has_init_boot: init_boot.is_some(),
+        has_vendor_boot: vendor_boot.is_some(),
+        has_device_tree,
+        boot_chain_verified: false,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
