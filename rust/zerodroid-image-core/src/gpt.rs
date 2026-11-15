@@ -245,6 +245,108 @@ pub fn parse_primary_gpt(
     })
 }
 
+/// Validates the backup GPT header and array against a previously parsed primary GPT.
+pub fn validate_backup_gpt(
+    data: &[u8],
+    primary: &GptImageIndex,
+    budget: ParseBudget,
+) -> Result<GptHeader, ParseError> {
+    let disk_size = u64::try_from(data.len()).map_err(|_| ParseError::IntegerOverflow)?;
+    budget.check_input(disk_size)?;
+    if disk_size != primary.disk_size_bytes || primary.sector_size < 512 {
+        return Err(ParseError::InvalidBootHeader);
+    }
+    let sector = u64::from(primary.sector_size);
+    if disk_size % sector != 0 {
+        return Err(ParseError::OutOfBounds);
+    }
+    let disk_sectors = disk_size / sector;
+    if disk_sectors < 3 {
+        return Err(ParseError::OutOfBounds);
+    }
+    let backup_lba = disk_sectors - 1;
+    let header_offset_u64 = backup_lba.checked_mul(sector).ok_or(ParseError::IntegerOverflow)?;
+    let header_offset = usize::try_from(header_offset_u64).map_err(|_| ParseError::IntegerOverflow)?;
+    let sector_end = header_offset.checked_add(primary.sector_size as usize).ok_or(ParseError::IntegerOverflow)?;
+    let sector_bytes = data.get(header_offset..sector_end).ok_or(ParseError::OutOfBounds)?;
+    if sector_bytes.get(..8) != Some(GPT_SIGNATURE.as_slice()) {
+        return Err(ParseError::InvalidMagic);
+    }
+
+    let revision = read_u32(sector_bytes, 8)?;
+    let header_size = read_u32(sector_bytes, 12)?;
+    let header_size_usize = usize::try_from(header_size).map_err(|_| ParseError::IntegerOverflow)?;
+    if header_size_usize < GPT_MIN_HEADER_SIZE || header_size_usize > primary.sector_size as usize {
+        return Err(ParseError::InvalidHeaderSize);
+    }
+    if read_u32(sector_bytes, 20)? != 0 {
+        return Err(ParseError::InvalidBootHeader);
+    }
+    let current_lba = read_u64(sector_bytes, 24)?;
+    let backup_lba_field = read_u64(sector_bytes, 32)?;
+    let first_usable_lba = read_u64(sector_bytes, 40)?;
+    let last_usable_lba = read_u64(sector_bytes, 48)?;
+    let mut disk_guid = [0_u8; 16];
+    disk_guid.copy_from_slice(&sector_bytes[56..72]);
+    let partition_entry_lba = read_u64(sector_bytes, 72)?;
+    let partition_entry_count = read_u32(sector_bytes, 80)?;
+    let partition_entry_size = read_u32(sector_bytes, 84)?;
+    let partition_entry_crc32 = read_u32(sector_bytes, 88)?;
+
+    if current_lba != backup_lba
+        || backup_lba_field != 1
+        || first_usable_lba != primary.header.first_usable_lba
+        || last_usable_lba != primary.header.last_usable_lba
+        || disk_guid != primary.header.disk_guid
+        || partition_entry_count != primary.header.partition_entry_count
+        || partition_entry_size != primary.header.partition_entry_size
+        || partition_entry_crc32 != primary.header.partition_entry_crc32
+        || revision != primary.header.revision
+    {
+        return Err(ParseError::InvalidBootHeader);
+    }
+    let header_bytes = &sector_bytes[..header_size_usize];
+    if crc32_header_with_zeroed_checksum(header_bytes) != read_u32(sector_bytes, 16)? {
+        return Err(ParseError::ChecksumMismatch);
+    }
+
+    let array_size = u64::from(partition_entry_count)
+        .checked_mul(u64::from(partition_entry_size))
+        .ok_or(ParseError::IntegerOverflow)?;
+    let array_offset = partition_entry_lba.checked_mul(sector).ok_or(ParseError::IntegerOverflow)?;
+    let array_end = array_offset.checked_add(array_size).ok_or(ParseError::IntegerOverflow)?;
+    let first_backup_array_lba = primary.header.last_usable_lba.checked_add(1).ok_or(ParseError::IntegerOverflow)?;
+    if partition_entry_lba < first_backup_array_lba || array_end > header_offset_u64 {
+        return Err(ParseError::OutOfBounds);
+    }
+    let array_start_usize = usize::try_from(array_offset).map_err(|_| ParseError::IntegerOverflow)?;
+    let array_end_usize = usize::try_from(array_end).map_err(|_| ParseError::IntegerOverflow)?;
+    let entries_bytes = data.get(array_start_usize..array_end_usize).ok_or(ParseError::OutOfBounds)?;
+    if crc32(entries_bytes) != partition_entry_crc32 {
+        return Err(ParseError::ChecksumMismatch);
+    }
+    let primary_entries = data.get(primary.header.partition_array_range.clone()).ok_or(ParseError::OutOfBounds)?;
+    if entries_bytes != primary_entries {
+        return Err(ParseError::InvalidBootHeader);
+    }
+
+    Ok(GptHeader {
+        revision,
+        header_size,
+        current_lba,
+        backup_lba: backup_lba_field,
+        first_usable_lba,
+        last_usable_lba,
+        disk_guid,
+        partition_entry_lba,
+        partition_entry_count,
+        partition_entry_size,
+        partition_entry_crc32,
+        header_range: header_offset..header_offset + header_size_usize,
+        partition_array_range: array_start_usize..array_end_usize,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,7 +379,7 @@ mod tests {
         put_u64(header, 24, 1);
         put_u64(header, 32, 99);
         put_u64(header, 40, 34);
-        put_u64(header, 48, 98);
+        put_u64(header, 48, 97);
         header[56] = 0x22;
         put_u64(header, 72, 2);
         put_u32(header, 80, 1);
@@ -286,6 +388,37 @@ mod tests {
         let checksum = crc32_header_with_zeroed_checksum(&header[..GPT_MIN_HEADER_SIZE]);
         put_u32(header, 16, checksum);
         disk
+    }
+
+    #[test]
+    fn backup_header_and_partition_array_must_match_primary() {
+        let mut disk = valid_disk();
+        let primary = parse_primary_gpt(&disk, 512, budget()).unwrap();
+        let primary_entries = disk[2 * 512..2 * 512 + 128].to_vec();
+        disk[98 * 512..98 * 512 + 128].copy_from_slice(&primary_entries);
+        let backup = &mut disk[99 * 512..100 * 512];
+        backup[..8].copy_from_slice(GPT_SIGNATURE);
+        put_u32(backup, 8, 0x0001_0000);
+        put_u32(backup, 12, GPT_MIN_HEADER_SIZE as u32);
+        put_u64(backup, 24, 99);
+        put_u64(backup, 32, 1);
+        put_u64(backup, 40, 34);
+        put_u64(backup, 48, 97);
+        backup[56] = 0x22;
+        put_u64(backup, 72, 98);
+        put_u32(backup, 80, 1);
+        put_u32(backup, 84, 128);
+        let entries_crc = crc32(&primary_entries);
+        put_u32(backup, 88, entries_crc);
+        let header_crc = crc32_header_with_zeroed_checksum(&backup[..GPT_MIN_HEADER_SIZE]);
+        put_u32(backup, 16, header_crc);
+
+        let parsed_backup = validate_backup_gpt(&disk, &primary, budget()).unwrap();
+        assert_eq!(parsed_backup.current_lba, 99);
+        assert_eq!(parsed_backup.partition_array_range, 98 * 512..98 * 512 + 128);
+
+        disk[99 * 512 + 56] ^= 1;
+        assert_eq!(validate_backup_gpt(&disk, &primary, budget()), Err(ParseError::ChecksumMismatch));
     }
 
     #[test]
