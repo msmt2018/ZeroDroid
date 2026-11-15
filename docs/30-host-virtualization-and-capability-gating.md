@@ -31,6 +31,10 @@ AVF：检测设备实际提供的 API、VirtualizationService、权限和支持�
 
 软件 CPU 仿真（包括 QEMU TCG）不属于 ZeroDroid 运行后端，也不得作为完整 Guest 的自动 fallback。没有可用硬件虚拟化时，应明确报告设备不支持完整 VM。
 
+## 3.2 能力探测执行框架
+
+`HostCapabilityDiscovery` 通过独立的 architecture、AVF、KVM probe 接口收集证据，普通探测异常会转成对应的 `ERROR` 事实并附带来源与异常类型；协程取消会继续向上传播，不会被吞掉。探测器本身不推断 API level、设备型号或包是否安装，也不提供默认成功的 Android 实现。平台适配器必须在其实现前完成权限/API 审计，并只返回由真实系统接口验证的事实。报告同时返回原始证据、后端决策和探测失败记录，便于 UI/日志解释阻断原因。
+
 ## 4. Root、Shizuku 与系统权限
 
 Shizuku、su、KernelSU、Magisk 不会自动提供 Hypervisor、EL2 或 AVF 管理权限。Root 不能凭空启用缺失硬件能力、内核配置或安全固件接口。刷入修改内核是独立实验路径，带来启动、安全和 OTA 风险，不能作为普通用户前提。
