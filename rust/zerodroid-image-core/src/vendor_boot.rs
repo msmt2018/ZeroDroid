@@ -188,6 +188,7 @@ pub fn parse_vendor_boot_image_v3_v4(
     let dtb = checked_range(dtb_start, u64::from(dtb_size), indexed_end)?;
 
     let mut ramdisk_entries = Vec::with_capacity(entry_count as usize);
+    let mut fragment_ranges = Vec::with_capacity(entry_count as usize);
     if let Some(table) = &table_range {
         for index in 0..entry_count {
             let entry_offset = usize::try_from(table.start)
@@ -225,12 +226,7 @@ pub fn parse_vendor_boot_image_v3_v4(
                 .checked_add(u64::from(ramdisk_offset))
                 .ok_or(ParseError::IntegerOverflow)?;
             let payload = checked_range(payload_start, u64::from(ramdisk_size), ramdisk_end)?;
-            for previous in &ramdisk_entries {
-                let previous: &VendorRamdiskTableEntryV4 = previous;
-                if payload.start < previous.payload.end && previous.payload.start < payload.end {
-                    return Err(ParseError::InvalidBootHeader);
-                }
-            }
+            fragment_ranges.push(payload.clone());
             ramdisk_entries.push(VendorRamdiskTableEntryV4 {
                 ramdisk_size,
                 ramdisk_offset,
@@ -240,6 +236,12 @@ pub fn parse_vendor_boot_image_v3_v4(
                 payload,
             });
         }
+    }
+    // Sort a separate range list so the public entries retain their on-disk table order.
+    // This keeps overlap validation O(n log n), rather than quadratic for attacker-controlled tables.
+    fragment_ranges.sort_unstable_by_key(|range| range.start);
+    if fragment_ranges.windows(2).any(|pair| pair[0].end > pair[1].start) {
+        return Err(ParseError::InvalidBootHeader);
     }
 
     Ok(VendorBootImageIndex {
@@ -353,6 +355,24 @@ mod tests {
         image[12288..12292].copy_from_slice(&512_u32.to_le_bytes());
         image[12292..12296].copy_from_slice(&1024_u32.to_le_bytes());
         assert_eq!(parse_vendor_boot_image_v3_v4(&image, budget(), 4096), Err(ParseError::OutOfBounds));
+    }
+
+    #[test]
+    fn rejects_overlapping_ramdisk_fragments() {
+        let mut image = base_image(4, 1024, 2048);
+        image[2112..2116].copy_from_slice(&216_u32.to_le_bytes());
+        image[2116..2120].copy_from_slice(&2_u32.to_le_bytes());
+        image[2120..2124].copy_from_slice(&108_u32.to_le_bytes());
+        image.resize(16384, 0);
+        for entry in 0..2 {
+            let offset = 12288 + entry * 108;
+            image[offset..offset + 4].copy_from_slice(&512_u32.to_le_bytes());
+            image[offset + 4..offset + 8].copy_from_slice(&(entry as u32 * 256).to_le_bytes());
+        }
+        assert_eq!(
+            parse_vendor_boot_image_v3_v4(&image, budget(), 4096),
+            Err(ParseError::InvalidBootHeader)
+        );
     }
 
     #[test]
