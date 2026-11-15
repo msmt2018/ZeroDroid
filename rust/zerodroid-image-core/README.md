@@ -29,3 +29,5 @@ Android Dynamic Partitions parsing validates the AOSP liblp geometry, metadata h
 
 
 Flattened Device Tree support parses FDT v16 and v17 with separate header handling, bounded reservation/node/property indexing, compatible/model extraction, and DTBO fragment target indexing. DTBO execution includes external/local phandle fixup planning, conflict-checked atomic writes to a private copy, target resolution, owned-tree/property merge, symbol export rewriting, bounded reservation-map union, and FDT v17 serialization with parse round-trip. `apply_dtbo_sequence` runs those stages in order for raw DTBO inputs and recalculates each overlay against the accumulated tree. Synthetic unit fixtures cover the internal transaction; real dtc/libfdt interoperability and Guest Platform Profile device-resource validation remain outstanding. This does not perform AVB authentication or prove that a guest boots.
+
+Overlay phandle relocation updates both node `phandle`/`linux,phandle` declarations and `__local_fixups__` references in one conflict-checked write set, keeping declarations and relocated references consistent.
