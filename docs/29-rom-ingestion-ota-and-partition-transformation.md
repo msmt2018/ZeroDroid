@@ -36,7 +36,7 @@ Sparse 转换保留逻辑块数量、块大小和填充语义；liblp parser 已
 
 ## 7. AVB 与 dm-verity
 
-解析 vbmeta、descriptors、hashtree、chain partition、rollback index 和 public key 元数据，报告签名与校验关系。
+AVB image core 已新增 VBMeta v1.0–1.2 Header 与 Authentication/Auxiliary Block 的有界结构解析，索引 Hash、Signature、Public Key、Public Key Metadata 与 Descriptor 记录，并校验块边界、区域重叠、描述符长度、保留字段和解析预算。当前只完成描述符通用 TLV 外层索引；Hash/Hashtree/Chain descriptor 的字段语义、digest 计算、公钥信任链、签名验证、rollback index 与设备持久化比较仍未实现。解析结果显式标记 `NotPerformed`，不得视为 AVB 验证通过。
 
 不得把自动剥离 AVB、关闭 dm-verity 或清除验证标志设为通用导入步骤。开发测试若需修改镜像，必须用户明确选择、保留原始输入、标记测试态、说明安全后果并验证修改后的启动链。生产安全模型使用受控信任根和一致签名策略。
 
