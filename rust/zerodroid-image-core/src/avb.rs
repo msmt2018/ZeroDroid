@@ -388,7 +388,7 @@ mod tests {
         data[start + 8..start + 16].copy_from_slice(&128u64.to_be_bytes());
         let body = start + 16;
         data[body..body + 8].copy_from_slice(&4096u64.to_be_bytes());
-        data[body + 8..body + 12].copy_from_slice(b"sha256");
+        data[body + 8..body + 14].copy_from_slice(b"sha256");
         data[body + 40..body + 44].copy_from_slice(&4u32.to_be_bytes());
         data[body + 44..body + 48].copy_from_slice(&2u32.to_be_bytes());
         data[body + 48..body + 52].copy_from_slice(&4u32.to_be_bytes());
