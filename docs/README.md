@@ -43,6 +43,7 @@
 35. [Implementation foundation 与工具链基线](35-implementation-foundation-and-toolchain.md)
 36. [上游核心源码拉取与许可证治理](36-upstream-source-checkout-and-license-governance.md)
 37. [Android ARM64 宿主移植、硬件适配与上游源码改造](37-android-arm64-host-porting-and-adaptation.md)
+38. [Boot Material Set 与启动材料组合索引](38-boot-material-set-and-boot-chain-index.md)
 
 ## 设计基线
 
