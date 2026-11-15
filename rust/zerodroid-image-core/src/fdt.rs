@@ -1322,6 +1322,18 @@ pub fn merge_overlay_fragments(
         .map_err(|_| FdtError::ResourceLimit)?;
     budget.check_input(u64::try_from(overlay_data.len()).map_err(|_| FdtError::IntegerOverflow)?)
         .map_err(|_| FdtError::ResourceLimit)?;
+
+    // The index is caller-supplied and public. Re-parse both inputs so stale or
+    // mismatched offsets/topology can never be used to copy bytes or route nodes.
+    if parse_fdt(base_data, budget)? != *base || parse_fdt(overlay_data, budget)? != *overlay {
+        return Err(FdtError::InvalidStructure);
+    }
+    // The Linux overlay application model does not merge an overlay's
+    // reservation map into the live tree. Reject rather than silently discard
+    // reservations that may describe memory the guest must keep unavailable.
+    if !overlay.reservations.is_empty() {
+        return Err(FdtError::InvalidReservationMap);
+    }
     if base.nodes.is_empty() || overlay.nodes.is_empty()
         || base.nodes.len().checked_add(overlay.nodes.len()).ok_or(FdtError::IntegerOverflow)?
             > budget.max_items as usize
@@ -2003,6 +2015,38 @@ mod overlay_merge_pipeline_tests {
         let output = serialize_fdt_v17(&merged, budget()).unwrap();
         let parsed = parse_fdt(&output, budget()).unwrap();
         assert!(parsed.nodes.iter().any(|node| node.path == "/__symbols__"));
+    }
+
+    #[test]
+    fn rejects_overlay_reservation_entries_instead_of_silently_dropping_them() {
+        let base_tree = FdtMergedTree {
+            reservations: vec![], boot_cpuid_phys: 0,
+            nodes: vec![node("", "/", None, vec![prop("compatible", b"vendor,base\\0")])],
+            root_compatible: vec!["vendor,base".to_owned()], model: None,
+        };
+        let overlay_tree = FdtMergedTree {
+            reservations: vec![FdtReservation { address: 0x9000_0000, size: 0x20_0000 }],
+            boot_cpuid_phys: 0,
+            nodes: vec![
+                node("", "/", None, vec![]),
+                node("fragment@0", "/fragment@0", Some(0), vec![prop("target-path", b"/\\0")]),
+                node("__overlay__", "/fragment@0/__overlay__", Some(1), vec![]),
+            ],
+            root_compatible: vec![], model: None,
+        };
+        let base_data = serialize_fdt_v17(&base_tree, budget()).unwrap();
+        let overlay_data = serialize_fdt_v17(&overlay_tree, budget()).unwrap();
+        let base_index = parse_fdt(&base_data, budget()).unwrap();
+        let overlay_index = parse_fdt(&overlay_data, budget()).unwrap();
+        let resolutions = [FdtOverlayResolution {
+            fragment_path: "/fragment@0".to_owned(),
+            target_node_path: "/".to_owned(),
+            target_phandle: 0,
+        }];
+        assert_eq!(
+            merge_overlay_fragments(&base_data, &base_index, &overlay_data, &overlay_index, &resolutions, budget()),
+            Err(FdtError::InvalidReservationMap),
+        );
     }
 
     #[test]
