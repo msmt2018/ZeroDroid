@@ -156,9 +156,15 @@ pub fn parse_vbmeta(
     }
     let release_bytes = data.get(128..176).ok_or(AvbParseError::OutOfBounds)?;
     let release_end = release_bytes.iter().position(|b| *b == 0).unwrap_or(release_bytes.len());
+    if release_bytes[release_end..].iter().any(|b| *b != 0) {
+        return Err(AvbParseError::InvalidHeader);
+    }
     let release_string = core::str::from_utf8(&release_bytes[..release_end])
         .map_err(|_| AvbParseError::InvalidHeader)?
         .to_owned();
+    if authentication_block_size % 64 != 0 || auxiliary_block_size % 64 != 0 {
+        return Err(AvbParseError::InvalidBlockLayout);
+    }
 
     let auth_start = VBMeta_HEADER_SIZE;
     let auth_end_u64 = u64::try_from(auth_start)
@@ -322,6 +328,16 @@ mod tests {
             parse_vbmeta(&vbmeta(), AvbParseBudget { max_input_bytes: 4096, max_descriptors: 0 }),
             Err(AvbParseError::ResourceLimit)
         );
+    }
+
+    #[test]
+    fn rejects_unaligned_blocks_and_nonzero_release_padding() {
+        let mut data = vbmeta();
+        data[20..28].copy_from_slice(&127u64.to_be_bytes());
+        assert_eq!(parse_vbmeta(&data, budget()), Err(AvbParseError::InvalidBlockLayout));
+        let mut data = vbmeta();
+        data[140] = 1;
+        assert_eq!(parse_vbmeta(&data, budget()), Err(AvbParseError::InvalidHeader));
     }
 
     #[test]
