@@ -2232,6 +2232,100 @@ mod overlay_merge_pipeline_tests {
     }
 
     #[test]
+    fn fdt_v16_header_is_parsed_without_v17_structure_size_field() {
+        let mut data = serialize_fdt_v17(&FdtMergedTree {
+            reservations: vec![FdtReservation { address: 0x8000_0000, size: 0x1000 }],
+            boot_cpuid_phys: 4,
+            nodes: vec![node("", "/", None, vec![prop("compatible", b"vendor,v16\0")])],
+            root_compatible: vec!["vendor,v16".to_owned()], model: None,
+        }, budget()).unwrap();
+        data[20..24].copy_from_slice(&16_u32.to_be_bytes());
+        data[36..40].fill(0);
+        let parsed = parse_fdt(&data, budget()).unwrap();
+        assert_eq!(parsed.header.version, 16);
+        assert_eq!(parsed.header.structure_size as usize, parsed.structure.len());
+        assert_eq!(parsed.root_compatible, vec!["vendor,v16"]);
+        assert_eq!(parsed.reservations[0].address, 0x8000_0000);
+    }
+
+    #[test]
+    fn merges_overlay_reservations_and_rejects_overlap() {
+        let base_tree = FdtMergedTree {
+            reservations: vec![FdtReservation { address: 0x1000, size: 0x100 }],
+            boot_cpuid_phys: 0,
+            nodes: vec![node("", "/", None, vec![prop("compatible", b"vendor,base\0")])],
+            root_compatible: vec!["vendor,base".to_owned()], model: None,
+        };
+        let overlay_tree = FdtMergedTree {
+            reservations: vec![
+                FdtReservation { address: 0x2000, size: 0x100 },
+                FdtReservation { address: 0x1000, size: 0x100 },
+            ],
+            boot_cpuid_phys: 0,
+            nodes: vec![
+                node("", "/", None, vec![]),
+                node("fragment@0", "/fragment@0", Some(0), vec![prop("target-path", b"/\0")]),
+                node("__overlay__", "/fragment@0/__overlay__", Some(1), vec![]),
+            ],
+            root_compatible: vec![], model: None,
+        };
+        let base_data = serialize_fdt_v17(&base_tree, budget()).unwrap();
+        let overlay_data = serialize_fdt_v17(&overlay_tree, budget()).unwrap();
+        let base_index = parse_fdt(&base_data, budget()).unwrap();
+        let overlay_index = parse_fdt(&overlay_data, budget()).unwrap();
+        let resolutions = [FdtOverlayResolution {
+            fragment_path: "/fragment@0".to_owned(),
+            target_node_path: "/".to_owned(), target_phandle: 0,
+        }];
+        let merged = merge_overlay_fragments(
+            &base_data, &base_index, &overlay_data, &overlay_index, &resolutions, budget(),
+        ).unwrap();
+        assert_eq!(merged.reservations.len(), 2);
+        assert_eq!(merged.reservations[0].address, 0x1000);
+        assert_eq!(merged.reservations[1].address, 0x2000);
+
+        let mut overlapping = overlay_tree.clone();
+        overlapping.reservations = vec![FdtReservation { address: 0x1080, size: 0x100 }];
+        let overlap_data = serialize_fdt_v17(&overlapping, budget()).unwrap();
+        let overlap_index = parse_fdt(&overlap_data, budget()).unwrap();
+        assert_eq!(
+            merge_overlay_fragments(
+                &base_data, &base_index, &overlap_data, &overlap_index, &resolutions, budget(),
+            ),
+            Err(FdtError::InvalidReservationMap),
+        );
+    }
+
+    #[test]
+    fn raw_dtbo_sequence_runs_fixup_resolve_merge_and_serialization_pipeline() {
+        let base_tree = FdtMergedTree {
+            reservations: vec![], boot_cpuid_phys: 0,
+            nodes: vec![
+                node("", "/", None, vec![prop("compatible", b"vendor,base\0")]),
+                node("soc", "/soc", Some(0), vec![]),
+            ],
+            root_compatible: vec!["vendor,base".to_owned()], model: None,
+        };
+        let overlay_tree = FdtMergedTree {
+            reservations: vec![], boot_cpuid_phys: 0,
+            nodes: vec![
+                node("", "/", None, vec![]),
+                node("fragment@0", "/fragment@0", Some(0), vec![prop("target-path", b"/soc\0")]),
+                node("__overlay__", "/fragment@0/__overlay__", Some(1), vec![]),
+                node("uart@1000", "/fragment@0/__overlay__/uart@1000", Some(2), vec![
+                    prop("compatible", b"ns16550a\0"),
+                ]),
+            ],
+            root_compatible: vec![], model: None,
+        };
+        let base = serialize_fdt_v17(&base_tree, budget()).unwrap();
+        let overlay = serialize_fdt_v17(&overlay_tree, budget()).unwrap();
+        let output = apply_dtbo_sequence(&base, &[&overlay], budget()).unwrap();
+        let parsed = parse_fdt(&output, budget()).unwrap();
+        assert!(parsed.nodes.iter().any(|n| n.path == "/soc/uart@1000"));
+    }
+
+    #[test]
     fn applies_ordered_overlay_sequence_against_accumulated_tree() {
         let base_tree = FdtMergedTree {
             reservations: vec![], boot_cpuid_phys: 0,
