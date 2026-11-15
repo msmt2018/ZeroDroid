@@ -781,11 +781,19 @@ pub struct FdtLocalFixup {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FdtOverlayFixupPlan {
-    pub external: Vec<FdtExternalFixup>,
-    pub local: Vec<FdtLocalFixup>,
-    pub declarations: Vec<FdtLocalFixup>,
-    pub base_max_phandle: u32,
-    pub phandle_delta: u32,
+    external: Vec<FdtExternalFixup>,
+    local: Vec<FdtLocalFixup>,
+    declarations: Vec<FdtLocalFixup>,
+    base_max_phandle: u32,
+    phandle_delta: u32,
+}
+
+impl FdtOverlayFixupPlan {
+    pub fn external(&self) -> &[FdtExternalFixup] { &self.external }
+    pub fn local(&self) -> &[FdtLocalFixup] { &self.local }
+    pub fn declarations(&self) -> &[FdtLocalFixup] { &self.declarations }
+    pub fn base_max_phandle(&self) -> u32 { self.base_max_phandle }
+    pub fn phandle_delta(&self) -> u32 { self.phandle_delta }
 }
 
 /// Finds a node by its canonical absolute FDT path.
@@ -1169,8 +1177,13 @@ pub struct FdtFixupWrite {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FdtOverlayWriteSet {
-    pub writes: Vec<FdtFixupWrite>,
-    pub output_size: usize,
+    writes: Vec<FdtFixupWrite>,
+    output_size: usize,
+}
+
+impl FdtOverlayWriteSet {
+    pub fn writes(&self) -> &[FdtFixupWrite] { &self.writes }
+    pub fn output_size(&self) -> usize { self.output_size }
 }
 
 /// Converts independent fixup records into a single sorted write set.
