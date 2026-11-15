@@ -32,6 +32,7 @@ pub struct AvbDescriptor {
     pub tag: u64,
     pub body: Range<usize>,
     pub encoded: Range<usize>,
+    pub vbmeta_minor: u32,
 }
 
 /// AVB Hash descriptor (tag 2). Variable data remains indexed in the original VBMeta buffer.
@@ -111,7 +112,7 @@ pub fn parse_hashtree_descriptor(
     let salt_len = usize::try_from(u32be(body, 92)?).map_err(|_| AvbParseError::IntegerOverflow)?;
     let digest_len = usize::try_from(u32be(body, 96)?).map_err(|_| AvbParseError::IntegerOverflow)?;
     let flags = u32be(body, 100)?;
-    if flags & !3 != 0 || body.get(104..164).ok_or(AvbParseError::InvalidDescriptor)?.iter().any(|b| *b != 0) {
+    if flags & !3 != 0 || (descriptor.vbmeta_minor == 0 && flags != 0) || body.get(104..164).ok_or(AvbParseError::InvalidDescriptor)?.iter().any(|b| *b != 0) {
         return Err(AvbParseError::InvalidDescriptor);
     }
 
@@ -134,7 +135,7 @@ pub fn parse_hashtree_descriptor(
     let partition_name = core::str::from_utf8(data.get(variable_start..partition_end)
         .ok_or(AvbParseError::OutOfBounds)?)
         .map_err(|_| AvbParseError::InvalidDescriptor)?.to_owned();
-    if partition_name.is_empty() || partition_name.as_bytes().contains(&0) {
+    if partition_name.is_empty() || partition_name.as_bytes().contains(&0) || (descriptor.vbmeta_minor == 0 && digest_len == 0) {
         return Err(AvbParseError::InvalidDescriptor);
     }
     Ok(AvbHashtreeDescriptor {
@@ -203,7 +204,7 @@ pub fn parse_hash_descriptor(
     let salt_len = usize::try_from(u32be(body, 44)?).map_err(|_| AvbParseError::IntegerOverflow)?;
     let digest_len = usize::try_from(u32be(body, 48)?).map_err(|_| AvbParseError::IntegerOverflow)?;
     let flags = u32be(body, 52)?;
-    if flags & !1 != 0 || body.get(56..116).ok_or(AvbParseError::InvalidDescriptor)?.iter().any(|b| *b != 0) {
+    if flags & !1 != 0 || (descriptor.vbmeta_minor == 0 && (flags != 0 || digest_len == 0)) || body.get(56..116).ok_or(AvbParseError::InvalidDescriptor)?.iter().any(|b| *b != 0) {
         return Err(AvbParseError::InvalidDescriptor);
     }
 
@@ -434,6 +435,7 @@ pub fn parse_vbmeta(
             tag,
             body: header_end..record_end,
             encoded: cursor..record_end,
+            vbmeta_minor: required_minor,
         });
         cursor = record_end;
     }
