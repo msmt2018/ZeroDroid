@@ -65,6 +65,20 @@ pub struct AvbHashtreeDescriptor {
     pub flags: u32,
 }
 
+/// AVB Property descriptor (tag 0); key and value are UTF-8 strings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AvbPropertyDescriptor {
+    pub key: String,
+    pub value: String,
+}
+
+/// AVB Kernel Cmdline descriptor (tag 3); command line bytes remain in the source buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AvbKernelCmdlineDescriptor {
+    pub flags: u32,
+    pub command_line: Range<usize>,
+}
+
 /// AVB Chain Partition descriptor (tag 4), v1.0-v1.2 layout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AvbChainPartitionDescriptor {
@@ -143,6 +157,78 @@ pub fn parse_hashtree_descriptor(
         fec_num_roots, fec_offset, fec_size, hash_algorithm, partition_name,
         salt: partition_end..salt_end, root_digest: salt_end..digest_end, flags,
     })
+}
+
+/// Parses a Property descriptor, including both NUL terminators and 8-byte padding.
+pub fn parse_property_descriptor(
+    data: &[u8],
+    descriptor: &AvbDescriptor,
+) -> Result<AvbPropertyDescriptor, AvbParseError> {
+    const TAG_PROPERTY: u64 = 0;
+    const FIXED_BODY_SIZE: usize = 16;
+    if descriptor.tag != TAG_PROPERTY || descriptor.body.len() < FIXED_BODY_SIZE {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    let body = data.get(descriptor.body.clone()).ok_or(AvbParseError::OutOfBounds)?;
+    let key_len = usize::try_from(u64be(body, 0)?).map_err(|_| AvbParseError::IntegerOverflow)?;
+    let value_len = usize::try_from(u64be(body, 8)?).map_err(|_| AvbParseError::IntegerOverflow)?;
+    let variable_len = key_len.checked_add(1).and_then(|v| v.checked_add(value_len))
+        .and_then(|v| v.checked_add(1)).ok_or(AvbParseError::IntegerOverflow)?;
+    let padded_len = variable_len.checked_add(7).ok_or(AvbParseError::IntegerOverflow)? & !7;
+    if FIXED_BODY_SIZE.checked_add(padded_len).ok_or(AvbParseError::IntegerOverflow)? != body.len() || key_len == 0 {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    let start = descriptor.body.start.checked_add(FIXED_BODY_SIZE).ok_or(AvbParseError::IntegerOverflow)?;
+    let key_end = start.checked_add(key_len).ok_or(AvbParseError::IntegerOverflow)?;
+    let value_start = key_end.checked_add(1).ok_or(AvbParseError::IntegerOverflow)?;
+    let value_end = value_start.checked_add(value_len).ok_or(AvbParseError::IntegerOverflow)?;
+    let terminator = data.get(key_end..value_start).ok_or(AvbParseError::OutOfBounds)?;
+    if terminator != [0] || data.get(value_end..value_end + 1).ok_or(AvbParseError::OutOfBounds)? != [0]
+        || data.get(value_end + 1..descriptor.body.end).ok_or(AvbParseError::OutOfBounds)?
+            .iter().any(|b| *b != 0)
+    {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    let key = core::str::from_utf8(data.get(start..key_end).ok_or(AvbParseError::OutOfBounds)?)
+        .map_err(|_| AvbParseError::InvalidDescriptor)?.to_owned();
+    let value = core::str::from_utf8(data.get(value_start..value_end).ok_or(AvbParseError::OutOfBounds)?)
+        .map_err(|_| AvbParseError::InvalidDescriptor)?.to_owned();
+    if key.as_bytes().contains(&0) || value.as_bytes().contains(&0) {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    Ok(AvbPropertyDescriptor { key, value })
+}
+
+/// Parses a Kernel Cmdline descriptor and validates UTF-8 and zero padding.
+pub fn parse_kernel_cmdline_descriptor(
+    data: &[u8],
+    descriptor: &AvbDescriptor,
+) -> Result<AvbKernelCmdlineDescriptor, AvbParseError> {
+    const TAG_KERNEL_CMDLINE: u64 = 3;
+    const FIXED_BODY_SIZE: usize = 8;
+    if descriptor.tag != TAG_KERNEL_CMDLINE || descriptor.body.len() < FIXED_BODY_SIZE {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    let body = data.get(descriptor.body.clone()).ok_or(AvbParseError::OutOfBounds)?;
+    let flags = u32be(body, 0)?;
+    let command_len = usize::try_from(u32be(body, 4)?).map_err(|_| AvbParseError::IntegerOverflow)?;
+    if flags & !3 != 0 || flags == 3 {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    let padded_len = command_len.checked_add(7).ok_or(AvbParseError::IntegerOverflow)? & !7;
+    if FIXED_BODY_SIZE.checked_add(padded_len).ok_or(AvbParseError::IntegerOverflow)? != body.len() {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    let start = descriptor.body.start.checked_add(FIXED_BODY_SIZE).ok_or(AvbParseError::IntegerOverflow)?;
+    let end = start.checked_add(command_len).ok_or(AvbParseError::IntegerOverflow)?;
+    let command = data.get(start..end).ok_or(AvbParseError::OutOfBounds)?;
+    core::str::from_utf8(command).map_err(|_| AvbParseError::InvalidDescriptor)?;
+    if data.get(end..descriptor.body.end).ok_or(AvbParseError::OutOfBounds)?
+        .iter().any(|b| *b != 0)
+    {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    Ok(AvbKernelCmdlineDescriptor { flags, command_line: start..end })
 }
 
 /// Parses the v1.0-v1.2 Chain Partition descriptor (no v1.3 flags field).
@@ -614,6 +700,54 @@ mod tests {
         data[body + 8..body + 12].copy_from_slice(&0u32.to_be_bytes());
         let parsed = parse_vbmeta(&data, budget()).unwrap();
         assert_eq!(parse_chain_partition_descriptor(&data, &parsed.descriptors[0]), Err(AvbParseError::InvalidDescriptor));
+    }
+
+    #[test]
+    fn parses_property_descriptor_and_rejects_missing_nul() {
+        let mut data = vbmeta();
+        data.resize(256 + 64 + 256, 0);
+        data[20..28].copy_from_slice(&256u64.to_be_bytes());
+        data[96..104].copy_from_slice(&48u64.to_be_bytes());
+        data[104..112].copy_from_slice(&48u64.to_be_bytes());
+        let start = 368usize;
+        data[start..start + 8].copy_from_slice(&0u64.to_be_bytes());
+        data[start + 8..start + 16].copy_from_slice(&32u64.to_be_bytes());
+        let body = start + 16;
+        data[body..body + 8].copy_from_slice(&3u64.to_be_bytes());
+        data[body + 8..body + 16].copy_from_slice(&2u64.to_be_bytes());
+        data[body + 16..body + 19].copy_from_slice(b"foo");
+        data[body + 19] = 0;
+        data[body + 20..body + 22].copy_from_slice(b"42");
+        data[body + 22] = 0;
+        let parsed = parse_vbmeta(&data, budget()).unwrap();
+        assert_eq!(parse_property_descriptor(&data, &parsed.descriptors[0]).unwrap(),
+            AvbPropertyDescriptor { key: "foo".into(), value: "42".into() });
+        data[body + 19] = b'x';
+        let parsed = parse_vbmeta(&data, budget()).unwrap();
+        assert_eq!(parse_property_descriptor(&data, &parsed.descriptors[0]), Err(AvbParseError::InvalidDescriptor));
+    }
+
+    #[test]
+    fn parses_kernel_cmdline_and_rejects_conflicting_flags() {
+        let mut data = vbmeta();
+        data.resize(256 + 64 + 256, 0);
+        data[20..28].copy_from_slice(&256u64.to_be_bytes());
+        data[96..104].copy_from_slice(&48u64.to_be_bytes());
+        data[104..112].copy_from_slice(&24u64.to_be_bytes());
+        let start = 368usize;
+        data[start..start + 8].copy_from_slice(&3u64.to_be_bytes());
+        data[start + 8..start + 16].copy_from_slice(&8u64.to_be_bytes());
+        let body = start + 16;
+        data[body..body + 4].copy_from_slice(&1u32.to_be_bytes());
+        data[body + 4..body + 8].copy_from_slice(&3u32.to_be_bytes());
+        data[body + 8..body + 11].copy_from_slice(b"foo");
+        let parsed = parse_vbmeta(&data, budget()).unwrap();
+        let cmdline = parse_kernel_cmdline_descriptor(&data, &parsed.descriptors[0]).unwrap();
+        assert_eq!(cmdline.flags, 1);
+        assert_eq!(&data[cmdline.command_line], b"foo");
+        data[body..body + 4].copy_from_slice(&3u32.to_be_bytes());
+        let parsed = parse_vbmeta(&data, budget()).unwrap();
+        assert_eq!(parse_kernel_cmdline_descriptor(&data, &parsed.descriptors[0]), Err(AvbParseError::InvalidDescriptor));
     }
 
     #[test]
