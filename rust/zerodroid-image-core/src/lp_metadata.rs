@@ -357,7 +357,8 @@ fn parse_metadata_copy(
     }
     let metadata_region_end = LP_RESERVED_BYTES
         .checked_add((LP_GEOMETRY_SIZE as u64).checked_mul(2).ok_or(ParseError::IntegerOverflow)?)
-        .and_then(|v| v.checked_add(u64::from(geometry.metadata_max_size).checked_mul(u64::from(geometry.metadata_slot_count))?))
+        .and_then(|v| v.checked_add(u64::from(geometry.metadata_max_size)
+            .checked_mul(u64::from(geometry.metadata_slot_count))?.checked_mul(2)?))
         .ok_or(ParseError::IntegerOverflow)?;
     let first_device = block_devices.first().ok_or(ParseError::InvalidBootHeader)?;
     let first_logical_byte = first_device.first_logical_sector.checked_mul(LP_SECTOR_SIZE).ok_or(ParseError::IntegerOverflow)?;
@@ -424,21 +425,21 @@ mod tests {
         put_name(&mut data,group_offset,"default");
         put_u64(&mut data,group_offset+40,0);
         let device_offset=group_offset+48;
-        put_u64(&mut data,device_offset,32);
+        put_u64(&mut data,device_offset,40);
         put_u32(&mut data,device_offset+8,4096);
         put_u64(&mut data,device_offset+16,128*1024);
         put_name(&mut data,device_offset+24,"super");
         let tables_size=52+24+48+64;
-        let header=&mut data[metadata_offset..metadata_offset+LP_HEADER_V1_0_SIZE];
-        put_u32(header,0,LP_METADATA_MAGIC);
-        put_u16(header,4,10); put_u16(header,6,0); put_u32(header,8,LP_HEADER_V1_0_SIZE as u32);
-        put_u32(header,44,tables_size as u32);
+        put_u32(&mut data,metadata_offset,LP_METADATA_MAGIC);
+        put_u16(&mut data,metadata_offset+4,10); put_u16(&mut data,metadata_offset+6,0);
+        put_u32(&mut data,metadata_offset+8,LP_HEADER_V1_0_SIZE as u32);
+        put_u32(&mut data,metadata_offset+44,tables_size as u32);
         let tables_hash=sha256(&data[tables_offset..tables_offset+tables_size]);
         data[metadata_offset+48..metadata_offset+80].copy_from_slice(&tables_hash);
-        put_u32(header,80,0);put_u32(header,84,1);put_u32(header,88,52);
-        put_u32(header,92,52);put_u32(header,96,1);put_u32(header,100,24);
-        put_u32(header,104,76);put_u32(header,108,1);put_u32(header,112,48);
-        put_u32(header,116,124);put_u32(header,120,1);put_u32(header,124,64);
+        put_u32(&mut data,metadata_offset+80,0);put_u32(&mut data,metadata_offset+84,1);put_u32(&mut data,metadata_offset+88,52);
+        put_u32(&mut data,metadata_offset+92,52);put_u32(&mut data,metadata_offset+96,1);put_u32(&mut data,metadata_offset+100,24);
+        put_u32(&mut data,metadata_offset+104,76);put_u32(&mut data,metadata_offset+108,1);put_u32(&mut data,metadata_offset+112,48);
+        put_u32(&mut data,metadata_offset+116,124);put_u32(&mut data,metadata_offset+120,1);put_u32(&mut data,metadata_offset+124,64);
         let header_hash=sha256_zeroed(&data[metadata_offset..metadata_offset+LP_HEADER_V1_0_SIZE],12..44).unwrap();
         data[metadata_offset+12..metadata_offset+44].copy_from_slice(&header_hash);
         data
