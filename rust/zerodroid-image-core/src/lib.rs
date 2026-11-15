@@ -63,7 +63,8 @@ pub fn parse_android_sparse_image(data:&[u8],budget:ParseBudget,max_expanded_byt
  let minimum_chunk_bytes=u64::from(h.total_chunks).checked_mul(u64::from(h.chunk_header_size)).ok_or(ParseError::IntegerOverflow)?;
  let remaining=u64::try_from(data.len()-cursor).map_err(|_|ParseError::IntegerOverflow)?;
  if minimum_chunk_bytes>remaining{return Err(ParseError::OutOfBounds)}
- let mut output_blocks=0_u64;\n let mut crc_state=!0_u32;
+ let mut output_blocks=0_u64;
+ let mut crc_state=!0_u32;
  let mut chunks=Vec::with_capacity(h.total_chunks as usize);
  for _ in 0..h.total_chunks{
   let header_end=cursor.checked_add(usize::from(h.chunk_header_size)).ok_or(ParseError::IntegerOverflow)?;
@@ -85,7 +86,8 @@ pub fn parse_android_sparse_image(data:&[u8],budget:ParseBudget,max_expanded_byt
   chunks.push(SparseChunk{kind:k,output_block_offset:offset,output_block_count:if contributes{blocks}else{0},payload});
   cursor=end;
  }
- if output_blocks!=u64::from(h.total_blocks)||cursor!=data.len(){return Err(ParseError::OutputSizeMismatch)}\n if h.image_checksum!=0&&h.image_checksum!=!crc_state{return Err(ParseError::ChecksumMismatch)}
+ if output_blocks!=u64::from(h.total_blocks)||cursor!=data.len(){return Err(ParseError::OutputSizeMismatch)}
+ if h.image_checksum!=0&&h.image_checksum!=!crc_state{return Err(ParseError::ChecksumMismatch)}
  Ok(SparseImageIndex{header:h,expanded_size_bytes:expanded,chunks})
 }
 #[cfg(test)]
