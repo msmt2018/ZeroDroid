@@ -24,6 +24,10 @@ pub enum FdtError {
     InvalidUtf8,
     ResourceLimit,
     IntegerOverflow,
+    MissingOverlaySubtree,
+    MissingOverlayTarget,
+    DuplicatePhandle,
+    InvalidPhandle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -348,7 +352,7 @@ pub fn matches_compatible(index: &FdtIndex, accepted: &[&str]) -> bool {
 /// Applying overlays, resolving symbols/fixups and merging phandles remain separate operations.
 pub fn index_overlay(data: &[u8], index: &FdtIndex, max_fragments: usize) -> Result<FdtOverlayIndex, FdtError> {
     let mut fragments = Vec::new();
-    for node in &index.nodes {
+    for (node_index, node) in index.nodes.iter().enumerate() {
         if node.parent != Some(0) || !node.name.starts_with("fragment@") {
             continue;
         }
@@ -378,10 +382,8 @@ pub fn index_overlay(data: &[u8], index: &FdtIndex, max_fragments: usize) -> Res
         if target_phandle.is_none() && target_path.is_none() {
             return Err(FdtError::InvalidStructure);
         }
-        let overlay_prefix = format!("{}/__overlay__", node.path);
         let has_overlay_subtree = index.nodes.iter().any(|candidate| {
-            candidate.parent == Some(index.nodes.iter().position(|parent| parent.path == node.path).unwrap_or(usize::MAX))
-                && candidate.path == overlay_prefix
+            candidate.parent == Some(node_index) && candidate.name == "__overlay__"
         });
         fragments.push(FdtOverlayFragment {
             path: node.path.clone(),
@@ -395,6 +397,79 @@ pub fn index_overlay(data: &[u8], index: &FdtIndex, max_fragments: usize) -> Res
         has_external_fixups: index.nodes.iter().any(|node| node.path == "/__fixups__"),
         has_local_fixups: index.nodes.iter().any(|node| node.path == "/__local_fixups__"),
     })
+}
+
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FdtOverlayResolution {
+    pub fragment_path: String,
+    pub target_node_path: String,
+    pub target_phandle: u32,
+}
+
+/// Resolves DTBO fragment targets against a base DTB without modifying either tree.
+/// Phandle lookup is built once, sorted and checked for duplicate identifiers.
+pub fn resolve_overlay_targets(
+    base_data: &[u8],
+    base: &FdtIndex,
+    overlay: &FdtOverlayIndex,
+) -> Result<Vec<FdtOverlayResolution>, FdtError> {
+    let mut phandles: Vec<(u32, usize)> = Vec::new();
+    for (node_index, node) in base.nodes.iter().enumerate() {
+        let mut node_phandle = None;
+        for property in &node.properties {
+            if property.name != "phandle" && property.name != "linux,phandle" {
+                continue;
+            }
+            let bytes = base_data.get(property.value.clone()).ok_or(FdtError::InvalidRange)?;
+            if bytes.len() != 4 {
+                return Err(FdtError::InvalidPhandle);
+            }
+            let value = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+            if value == 0 || value == u32::MAX {
+                return Err(FdtError::InvalidPhandle);
+            }
+            if node_phandle.is_some_and(|previous| previous != value) {
+                return Err(FdtError::InvalidPhandle);
+            }
+            node_phandle = Some(value);
+        }
+        if let Some(value) = node_phandle {
+            phandles.push((value, node_index));
+        }
+    }
+    phandles.sort_unstable_by_key(|entry| entry.0);
+    if phandles.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(FdtError::DuplicatePhandle);
+    }
+
+    let mut resolved = Vec::with_capacity(overlay.fragments.len());
+    for fragment in &overlay.fragments {
+        if !fragment.has_overlay_subtree {
+            return Err(FdtError::MissingOverlaySubtree);
+        }
+        let target_index = if let Some(path) = &fragment.target_path {
+            base.nodes.iter().position(|node| &node.path == path)
+                .ok_or(FdtError::MissingOverlayTarget)?
+        } else if let Some(phandle) = fragment.target_phandle {
+            let position = phandles.binary_search_by_key(&phandle, |entry| entry.0)
+                .map_err(|_| FdtError::MissingOverlayTarget)?;
+            phandles[position].1
+        } else {
+            return Err(FdtError::MissingOverlayTarget);
+        };
+        let target = &base.nodes[target_index];
+        let target_phandle = phandles.iter()
+            .find(|entry| entry.1 == target_index)
+            .map(|entry| entry.0)
+            .unwrap_or(0);
+        resolved.push(FdtOverlayResolution {
+            fragment_path: fragment.path.clone(),
+            target_node_path: target.path.clone(),
+            target_phandle,
+        });
+    }
+    Ok(resolved)
 }
 
 
