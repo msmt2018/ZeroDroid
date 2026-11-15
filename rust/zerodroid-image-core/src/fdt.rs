@@ -1064,6 +1064,8 @@ mod fixup_tests {
         data.extend_from_slice(&0_u32.to_be_bytes());
         let local_value = data.len();
         data.extend_from_slice(&2_u32.to_be_bytes());
+        let declared_phandle = data.len();
+        data.extend_from_slice(&2_u32.to_be_bytes());
         let index = FdtIndex {
             header: FdtHeader { total_size: 0, version: 17, last_compatible_version: 16,
                 boot_cpuid_phys: 0, structure_size: 0, strings_size: 0 },
@@ -1076,6 +1078,7 @@ mod fixup_tests {
                 node("/fragment@0/__overlay__/dev", Some(3), vec![
                     prop("clocks", external_value, 4),
                     prop("local-ref", local_value, 4),
+                    prop("phandle", declared_phandle, 4),
                 ]),
                 node("/__local_fixups__", Some(0), vec![]),
                 node("/__local_fixups__/fragment@0", Some(5), vec![]),
@@ -1107,6 +1110,14 @@ mod fixup_tests {
         assert_eq!(plan.local.len(), 1);
         assert_eq!(plan.local[0].original_phandle, 2);
         assert_eq!(plan.local[0].relocated_phandle, 102);
+        assert_eq!(plan.declarations.len(), 1);
+        assert_eq!(plan.declarations[0].original_phandle, 2);
+        assert_eq!(plan.declarations[0].relocated_phandle, 102);
+        let writes = build_overlay_fixup_write_set(&overlay_data, &plan, budget()).unwrap();
+        let fixed = apply_overlay_fixup_write_set(&overlay_data, &writes, budget()).unwrap();
+        let declaration = &plan.declarations[0];
+        let declaration_start = declaration.overlay_property_range.start;
+        assert_eq!(be32(&fixed, declaration_start).unwrap(), 102);
     }
 
     #[test]
