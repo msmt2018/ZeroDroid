@@ -28,6 +28,15 @@ Sparse 转换保留逻辑块数量、块大小和填充语义；liblp parser 已
 
 不将 super.img 当作单一文件系统，不假设所有厂商分区都在 super 中；未知厂商分区名称应保留元数据，不得擅自删除。
 
+
+### 5.1 统一 ROM 分区材料索引（新增）
+
+Rust image core 新增 `partition_catalog`，将已解析的 GPT 物理分区、liblp 逻辑分区及单份 VBMeta 的 AVB 分区引用合并为只读材料索引。GPT 名称按 UTF-16LE 严格解码；LP 逻辑分区记录 group、逻辑扇区数和 backing block-device 名称；AVB Hash/Hashtree/Chain/Property/Kernel Cmdline 描述符继续使用对应语义解析器，未知 tag 保留为 Unknown，不伪造语义。
+
+A/B 规范化必须由调用方显式选择 A、B 或 None。None 不推断后缀；选择 A/B 时无后缀名称映射到所选 slot，另一 slot 的显式后缀保持原样，不得把 `system_b` 错误映射成 `system_a`。索引报告规范化重名、AVB 引用缺失和 Chain Partition 边；Chain 边的目标 VBMeta 尚未加载时明确标记 `target_vbmeta_loaded=false`，因此当前是依赖关系索引，不是完整递归信任链。
+
+该目录构建只验证结构和引用关系，不执行分区数据提取、Hash/Hashtree 计算、公钥信任、签名或 rollback index 验证。其 `verification` 状态继承 VBMeta 的 `NotPerformed`，不得作为 Guest 启动放行条件。
+
 ## 6. 转换策略
 
 先生成 Transformation Plan，记录输入分区/哈希、操作类型、依赖与兼容依据、输出分区/尺寸/哈希、对 AVB/VINTF/fstab/SELinux/HAL/OTA 的影响、可逆性和恢复方式。
