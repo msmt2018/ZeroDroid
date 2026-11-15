@@ -9,3 +9,4 @@ Implemented:
 - payload ranges reference the caller input without copying or expanding data.
 
 The parser validates structure and size accounting only. It does not apply chunks, calculate CRC32, verify AVB/VBMeta, parse LP metadata, or boot a guest. Those remain separate stages.
+\n\nCRC32 validation now covers RAW, FILL and DONT_CARE expanded bytes, optional per-chunk CRC32 checkpoints, and the optional file-header checksum. This remains a bounded in-memory parser/indexer: it does not write expanded images, verify AVB/VBMeta, or validate LP metadata. The caller must choose conservative input and expanded-size budgets.\n
