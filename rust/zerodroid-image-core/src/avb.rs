@@ -182,9 +182,10 @@ pub fn parse_property_descriptor(
     let key_end = start.checked_add(key_len).ok_or(AvbParseError::IntegerOverflow)?;
     let value_start = key_end.checked_add(1).ok_or(AvbParseError::IntegerOverflow)?;
     let value_end = value_start.checked_add(value_len).ok_or(AvbParseError::IntegerOverflow)?;
+    let value_terminator_end = value_end.checked_add(1).ok_or(AvbParseError::IntegerOverflow)?;
     let terminator = data.get(key_end..value_start).ok_or(AvbParseError::OutOfBounds)?;
-    if terminator != [0] || data.get(value_end..value_end + 1).ok_or(AvbParseError::OutOfBounds)? != [0]
-        || data.get(value_end + 1..descriptor.body.end).ok_or(AvbParseError::OutOfBounds)?
+    if terminator != [0] || data.get(value_end..value_terminator_end).ok_or(AvbParseError::OutOfBounds)? != [0]
+        || data.get(value_terminator_end..descriptor.body.end).ok_or(AvbParseError::OutOfBounds)?
             .iter().any(|b| *b != 0)
     {
         return Err(AvbParseError::InvalidDescriptor);
@@ -708,10 +709,10 @@ mod tests {
         data.resize(256 + 64 + 256, 0);
         data[20..28].copy_from_slice(&256u64.to_be_bytes());
         data[96..104].copy_from_slice(&48u64.to_be_bytes());
-        data[104..112].copy_from_slice(&48u64.to_be_bytes());
+        data[104..112].copy_from_slice(&40u64.to_be_bytes());
         let start = 368usize;
         data[start..start + 8].copy_from_slice(&0u64.to_be_bytes());
-        data[start + 8..start + 16].copy_from_slice(&32u64.to_be_bytes());
+        data[start + 8..start + 16].copy_from_slice(&24u64.to_be_bytes());
         let body = start + 16;
         data[body..body + 8].copy_from_slice(&3u64.to_be_bytes());
         data[body + 8..body + 16].copy_from_slice(&2u64.to_be_bytes());
@@ -733,10 +734,10 @@ mod tests {
         data.resize(256 + 64 + 256, 0);
         data[20..28].copy_from_slice(&256u64.to_be_bytes());
         data[96..104].copy_from_slice(&48u64.to_be_bytes());
-        data[104..112].copy_from_slice(&24u64.to_be_bytes());
+        data[104..112].copy_from_slice(&32u64.to_be_bytes());
         let start = 368usize;
         data[start..start + 8].copy_from_slice(&3u64.to_be_bytes());
-        data[start + 8..start + 16].copy_from_slice(&8u64.to_be_bytes());
+        data[start + 8..start + 16].copy_from_slice(&16u64.to_be_bytes());
         let body = start + 16;
         data[body..body + 4].copy_from_slice(&1u32.to_be_bytes());
         data[body + 4..body + 8].copy_from_slice(&3u32.to_be_bytes());
