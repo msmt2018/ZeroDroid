@@ -27,6 +27,18 @@
 
 这不是完整 DTB 输出。下一阶段仍需实现 canonical FDT v17 serializer：重新生成 strings/structure/reservation blocks，计算所有偏移和长度，执行预算检查，再通过 `parse_fdt` 对输出做 round-trip 验证。还需合并并重写 `__symbols__` 导出路径、定义多 DTBO 事务/冲突策略，并增加真实 dtc 生成的 DTB/DTBO fixtures。当前函数也要求调用者先完成 fixup 并提供可信的 target resolution；它不执行 fixup、不验证签名，也不证明 Guest 可启动。
 
+## Overlay `__symbols__` 导出合并
+
+合并阶段现在会读取 Overlay 根节点的 `/__symbols__`：
+
+- 将 `/fragment@N/__overlay__` 下的导出路径映射到对应 resolution 的目标路径。
+- 保留基础 DTB 已有符号；新增 Overlay 符号写入基础树的 `/__symbols__`，必要时创建该节点。
+- 要求源路径严格位于某个已解析 fragment 的 `__overlay__` 子树中，且映射后的目标节点确实存在。
+- 同名符号映射到同一路径时视为幂等；映射到不同路径时拒绝合并。
+- 基础树已有符号路径也会验证为绝对路径并指向当前树中的节点。
+
+该处理只负责合并后的导出符号路径，不代替 external/local fixup 写回。调用方仍必须先构建并应用 fixup write set，再解析 fragment target，最后调用 merge。
+
 ## FDT v17 序列化与 round-trip
 
 `serialize_fdt_v17(tree, budget)` 将拥有树编码为 FDT v17：
@@ -39,7 +51,7 @@
 
 序列化输入拓扑、属性名、重复属性、保留区域及输出长度均受检查和 ParseBudget 限制。round-trip 失败时不返回 DTB。
 
-这仍是结构序列化与自校验，不是 AVB 签名验证、DTB 来源认证或真实设备启动验证。Overlay `__symbols__` 导出合并与路径重写仍未完成；真实 dtc 生成的跨版本 fixture 和多 DTBO 事务测试仍是后续工作。
+这仍是结构序列化与自校验，不是 AVB 签名验证、DTB 来源认证或真实设备启动验证。真实 dtc 生成的跨版本 fixture 和多 DTBO 事务测试仍是后续工作。
 
 ## 回归测试补充
 
