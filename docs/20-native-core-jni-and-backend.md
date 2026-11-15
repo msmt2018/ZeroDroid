@@ -28,9 +28,9 @@ C++20 用于 Android NDK/JNI、宿主系统调用、Runtime 和后续 VMM/Hyperv
 
 - Native C ABI v1：Runtime opaque handle、状态码、错误结构、Host KVM 设备/API 探测。
 - JNI：仅提供 ABI 版本和 Host 能力结果转换；尚未暴露 VM 创建/启动接口。
-- Rust image core：checked range/alignment、输入/item/展开大小预算、Android sparse v1 结构索引与 CRC32 校验、Android boot image v3/v4 header/payload-range 索引，以及 Vendor Boot v3/v4 section/ramdisk-table/bootconfig 索引、Primary GPT Header/Partition Array/CRC32 解析。Boot signature 当前只索引范围，不代表完成密码学认证；Vendor Boot parser 不解释 DTB、board selection 或 bootconfig 语义。
+- Rust image core：checked range/alignment、输入/item/展开大小预算、Android sparse v1 结构索引与 CRC32 校验、Android boot image v3/v4 header/payload-range 索引，以及 Vendor Boot v3/v4 section/ramdisk-table/bootconfig 索引、Primary/Backup GPT Header 与 Partition Array CRC32、一致性校验、Protective MBR 校验及分区 GUID/重叠检查。Boot signature 当前只索引范围，不代表完成密码学认证；Vendor Boot parser 不解释 DTB、board selection 或 bootconfig 语义。
 - C ABI header smoke test：使用 C 编译器编译公共头文件，并链接 C++ 实现。
-- 尚未实现：sparse 数据写出、Init Boot、LP metadata、Backup GPT/Protective MBR 交叉验证、VBMeta 完整解析、AVB 验证、KVM VM/vCPU/Stage-2/GIC/设备运行后端和 Guest 启动。
+- 尚未实现：sparse 数据写出、Init Boot、LP metadata、GPT 之外的 Protective MBR 扩展语义校验、VBMeta 完整解析、AVB 验证、KVM VM/vCPU/Stage-2/GIC/设备运行后端和 Guest 启动。
 
 ## 5. Backend 接口
 
