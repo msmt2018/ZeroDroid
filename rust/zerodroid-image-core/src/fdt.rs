@@ -1327,18 +1327,18 @@ fn validate_overlay_resolutions(
 
     let mut seen = Vec::with_capacity(resolutions.len());
     for resolution in resolutions {
-        if seen.iter().any(|path| *path == resolution.fragment_path) {
+        if seen.iter().any(|path| *path == resolution.fragment_path.as_str()) {
             return Err(FdtError::InvalidStructure);
         }
         seen.push(resolution.fragment_path.as_str());
 
-        let fragment = overlay.nodes.iter()
-            .find(|node| node.path == resolution.fragment_path)
+        let fragment_index = overlay.nodes.iter()
+            .position(|node| node.path == resolution.fragment_path)
             .ok_or(FdtError::MissingOverlayTarget)?;
+        let fragment = &overlay.nodes[fragment_index];
         if fragment.parent != Some(0) || !fragment.name.starts_with("fragment@")
             || !overlay.nodes.iter().any(|node| {
-                node.parent == overlay.nodes.iter().position(|candidate| candidate.path == fragment.path)
-                    && node.name == "__overlay__"
+                node.parent == Some(fragment_index) && node.name == "__overlay__"
             })
         {
             return Err(FdtError::MissingOverlaySubtree);
