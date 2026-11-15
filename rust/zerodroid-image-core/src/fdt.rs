@@ -1307,6 +1307,91 @@ pub fn merge_overlay_sequence(
     final_tree.ok_or(FdtError::InvalidStructure)
 }
 
+fn validate_overlay_resolutions(
+    base_data: &[u8],
+    base: &FdtIndex,
+    overlay_data: &[u8],
+    overlay: &FdtIndex,
+    resolutions: &[FdtOverlayResolution],
+    budget: ParseBudget,
+) -> Result<(), FdtError> {
+    if resolutions.is_empty() || resolutions.len() > budget.max_items as usize {
+        return Err(FdtError::ResourceLimit);
+    }
+    let fragments: Vec<&FdtNode> = overlay.nodes.iter()
+        .filter(|node| node.parent == Some(0) && node.name.starts_with("fragment@"))
+        .collect();
+    if fragments.len() != resolutions.len() {
+        return Err(FdtError::MissingOverlayTarget);
+    }
+
+    let mut seen = Vec::with_capacity(resolutions.len());
+    for resolution in resolutions {
+        if seen.iter().any(|path| *path == resolution.fragment_path) {
+            return Err(FdtError::InvalidStructure);
+        }
+        seen.push(resolution.fragment_path.as_str());
+
+        let fragment = overlay.nodes.iter()
+            .find(|node| node.path == resolution.fragment_path)
+            .ok_or(FdtError::MissingOverlayTarget)?;
+        if fragment.parent != Some(0) || !fragment.name.starts_with("fragment@")
+            || !overlay.nodes.iter().any(|node| {
+                node.parent == overlay.nodes.iter().position(|candidate| candidate.path == fragment.path)
+                    && node.name == "__overlay__"
+            })
+        {
+            return Err(FdtError::MissingOverlaySubtree);
+        }
+
+        let target_index = base.nodes.iter()
+            .position(|node| node.path == resolution.target_node_path)
+            .ok_or(FdtError::MissingOverlayTarget)?;
+        let target = &base.nodes[target_index];
+        let mut target_phandle = None;
+        for property in &target.properties {
+            if property.name == "phandle" || property.name == "linux,phandle" {
+                let bytes = base_data.get(property.value.clone()).ok_or(FdtError::InvalidRange)?;
+                if bytes.len() != 4 { return Err(FdtError::InvalidPhandle); }
+                let value = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                if value == 0 || value == u32::MAX
+                    || target_phandle.is_some_and(|previous| previous != value)
+                {
+                    return Err(FdtError::InvalidPhandle);
+                }
+                target_phandle = Some(value);
+            }
+        }
+        if target_phandle.unwrap_or(0) != resolution.target_phandle {
+            return Err(FdtError::InvalidPhandle);
+        }
+
+        let target_path = fragment.properties.iter().find(|p| p.name == "target-path");
+        let target_handle = fragment.properties.iter().find(|p| p.name == "target");
+        match (target_path, target_handle) {
+            (Some(path), None) => {
+                let bytes = overlay_data.get(path.value.clone()).ok_or(FdtError::InvalidRange)?;
+                let value = c_string(bytes)?;
+                if value.len() + 1 != bytes.len() || value != resolution.target_node_path {
+                    return Err(FdtError::MissingOverlayTarget);
+                }
+            }
+            (None, Some(handle)) => {
+                let bytes = overlay_data.get(handle.value.clone()).ok_or(FdtError::InvalidRange)?;
+                if bytes.len() != 4 {
+                    return Err(FdtError::InvalidPhandle);
+                }
+                let value = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                if value == 0 || value == u32::MAX || value != resolution.target_phandle {
+                    return Err(FdtError::MissingOverlayTarget);
+                }
+            }
+            _ => return Err(FdtError::MissingOverlayTarget),
+        }
+    }
+    Ok(())
+}
+
 /// Materializes a bounded, owned tree and applies the already-resolved fragment
 /// subtrees in fragment order. This is the merge stage only: serialization into a
 /// new DTB; exported symbol rewriting is included in the returned owned tree.
@@ -1334,6 +1419,7 @@ pub fn merge_overlay_fragments(
     if !overlay.reservations.is_empty() {
         return Err(FdtError::InvalidReservationMap);
     }
+    validate_overlay_resolutions(base_data, base, overlay_data, overlay, resolutions, budget)?;
     if base.nodes.is_empty() || overlay.nodes.is_empty()
         || base.nodes.len().checked_add(overlay.nodes.len()).ok_or(FdtError::IntegerOverflow)?
             > budget.max_items as usize
