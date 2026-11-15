@@ -470,7 +470,7 @@ mod tests {
     #[test]
     fn chain_graph_reports_child_key_and_rollback_location_mismatch() {
         let (root_data, root_index) = synthetic_vbmeta(Some("vbmeta_system"), [1,2,3,4], 3);
-        let (child_data, child_index) = synthetic_vbmeta("vbmeta_system", None, [9,8,7,6], 4);
+        let (child_data, child_index) = synthetic_vbmeta(None, [9,8,7,6], 4);
         let inputs = [
             VbMetaInput { partition_name: "vbmeta", data: &root_data, index: &root_index },
             VbMetaInput { partition_name: "vbmeta_system", data: &child_data, index: &child_index },
@@ -483,7 +483,7 @@ mod tests {
     #[test]
     fn chain_graph_reports_duplicate_normalized_nodes() {
         let (data_a, index_a) = synthetic_vbmeta(None, [1,2,3,4], 0);
-        let (data_b, index_b) = synthetic_vbmeta("vbmeta", None, [5,6,7,8], 0);
+        let (data_b, index_b) = synthetic_vbmeta(None, [5,6,7,8], 0);
         let inputs = [
             VbMetaInput { partition_name: "vbmeta", data: &data_a, index: &index_a },
             VbMetaInput { partition_name: "vbmeta", data: &data_b, index: &index_b },
@@ -500,7 +500,7 @@ mod tests {
         let graph = build_vbmeta_chain_graph(&inputs, SlotSelection::None, 4, 4).unwrap();
         assert_eq!(graph.cyclic_edges, vec![("vbmeta".to_owned(), "vbmeta".to_owned())]);
 
-        let (other_data, other_index) = synthetic_vbmeta("vbmeta", Some("vbmeta_system"), [1,2,3,4], 2);
+        let (other_data, other_index) = synthetic_vbmeta(Some("vbmeta_system"), [1,2,3,4], 2);
         let missing = [VbMetaInput { partition_name: "vbmeta", data: &other_data, index: &other_index }];
         let graph = build_vbmeta_chain_graph(&missing, SlotSelection::None, 4, 4).unwrap();
         assert_eq!(graph.missing_targets, vec!["vbmeta_system".to_owned()]);
