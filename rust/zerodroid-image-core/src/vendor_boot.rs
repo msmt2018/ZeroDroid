@@ -530,4 +530,78 @@ mod tests {
         image[2120..2124].copy_from_slice(&1_u32.to_le_bytes());
         assert_eq!(parse_vendor_boot_image_v3_v4(&image, budget(), u64::MAX), Err(ParseError::ResourceLimit));
     }
+
+    fn synthetic_boot_index() -> crate::AndroidBootImageIndex {
+        crate::AndroidBootImageIndex {
+            header: crate::AndroidBootHeaderV3V4 {
+                header_version: 3, header_size: 1580, kernel_size: 4096,
+                ramdisk_size: 1024, os_version: 0, signature_size: 0,
+            },
+            header_page: 0..4096,
+            kernel: 4096..8192,
+            ramdisk: 8192..9216,
+            boot_signature: None,
+            total_indexed_bytes: 9216,
+        }
+    }
+
+    #[test]
+    fn boot_material_set_joins_boot_and_vendor_ranges_without_copying() {
+        let boot_data = vec![0_u8; 9216];
+        let vendor_data = base_image(3, 1024, 2048);
+        let vendor_index = parse_vendor_boot_image_v3_v4(&vendor_data, budget(), 4096).unwrap();
+        let set = build_boot_material_set(
+            &boot_data, &synthetic_boot_index(), None,
+            Some((&vendor_data, &vendor_index)), 8,
+        ).unwrap();
+        assert_eq!(set.entries.len(), 4);
+        assert!(set.has_vendor_boot);
+        assert!(set.has_device_tree);
+        assert!(!set.has_init_boot);
+        assert!(!set.boot_chain_verified);
+        assert_eq!(set.entries[0].kind, BootMaterialKind::Kernel);
+        assert_eq!(set.entries[3].kind, BootMaterialKind::DeviceTreeBlob);
+    }
+
+    #[test]
+    fn boot_material_set_checks_source_ranges_and_entry_budget() {
+        let mut invalid = synthetic_boot_index();
+        invalid.kernel = 9000..10000;
+        let boot_data = vec![0_u8; 9216];
+        assert_eq!(
+            build_boot_material_set(&boot_data, &invalid, None, None, 8),
+            Err(BootMaterialError::InvalidImageIndex)
+        );
+        assert_eq!(
+            build_boot_material_set(&boot_data, &synthetic_boot_index(), None, None, 1),
+            Err(BootMaterialError::ResourceLimit)
+        );
+    }
+
+    #[test]
+    fn boot_material_set_rejects_invalid_init_boot_semantics() {
+        let boot_data = vec![0_u8; 9216];
+        let init_data = vec![0_u8; 8192];
+        let mut init = crate::InitBootImageIndex {
+            header: crate::AndroidBootHeaderV3V4 {
+                header_version: 4, header_size: 1584, kernel_size: 1,
+                ramdisk_size: 1024, os_version: 0, signature_size: 0,
+            },
+            header_page: 0..4096,
+            ramdisk: 4096..5120,
+            boot_signature: None,
+            total_indexed_bytes: 5120,
+        };
+        assert_eq!(
+            build_boot_material_set(&boot_data, &synthetic_boot_index(),
+                Some((&init_data, &init)), None, 8),
+            Err(BootMaterialError::InvalidInitBootSemantics)
+        );
+        init.header.kernel_size = 0;
+        let set = build_boot_material_set(&boot_data, &synthetic_boot_index(),
+            Some((&init_data, &init)), None, 8).unwrap();
+        assert!(set.has_init_boot);
+        assert!(set.entries.iter().any(|entry| entry.kind == BootMaterialKind::InitRamdisk));
+    }
+
 }
