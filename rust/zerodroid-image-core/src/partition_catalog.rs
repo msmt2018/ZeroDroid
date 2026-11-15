@@ -336,7 +336,7 @@ pub fn build_vbmeta_chain_graph(
             if edges.len() >= max_edges { return Err(ChainGraphError::ResourceLimit); }
             let target_normalized = normalize_slot(&chain.partition_name, slot);
             let target_index = names.get(&target_normalized).copied();
-            let child = target_index.and_then(|idx| {
+            let child = target_index.and_then(|_| {
                 inputs.iter().find(|candidate| {
                     normalize_slot(candidate.partition_name, slot) == target_normalized
                 })
@@ -417,34 +417,44 @@ mod tests {
     use super::*;
 
     fn synthetic_vbmeta(target: Option<&str>, key: [u8; 4], location: u32) -> (Vec<u8>, VbMetaImageIndex) {
-        let mut data = vec![0_u8; 104];
-        let mut descriptors = Vec::new();
-        if let Some(target) = target {
+        let (descriptors, descriptor_range, public_key_offset) = if let Some(target) = target {
             let name = target.as_bytes();
+            let variable_len = name.len() + 4;
+            let padded_len = (variable_len + 7) & !7;
+            let body_len = 76 + padded_len;
+            let record_end = 16 + body_len;
+            let mut data = vec![0_u8; record_end + 4];
             data[0..8].copy_from_slice(&4_u64.to_be_bytes());
-            data[8..16].copy_from_slice(&84_u64.to_be_bytes());
+            data[8..16].copy_from_slice(&(body_len as u64).to_be_bytes());
             data[16..20].copy_from_slice(&location.to_be_bytes());
             data[20..24].copy_from_slice(&(name.len() as u32).to_be_bytes());
             data[24..28].copy_from_slice(&4_u32.to_be_bytes());
             data[92..92 + name.len()].copy_from_slice(name);
-            data[96..100].copy_from_slice(&key);
-            descriptors.push(crate::avb::AvbDescriptor {
-                tag: 4, body: 16..100, encoded: 0..100, vbmeta_minor: 2,
-            });
-        }
-        data[100..104].copy_from_slice(&key);
+            data[92 + name.len()..96 + name.len()].copy_from_slice(&key);
+            data[record_end..record_end + 4].copy_from_slice(&key);
+            (data, vec![crate::avb::AvbDescriptor {
+                tag: 4, body: 16..record_end, encoded: 0..record_end, vbmeta_minor: 2,
+            }], record_end)
+        } else {
+            let mut data = vec![0_u8; 4];
+            data.copy_from_slice(&key);
+            (data, Vec::new(), 0)
+        };
+        let public_key_end = public_key_offset + 4;
+        let descriptor_end = descriptors.last().map_or(0, |descriptor| descriptor.encoded.end);
         let header = crate::avb::VbMetaHeader {
             required_major: 1, required_minor: 2,
             authentication_block_size: 0, auxiliary_block_size: 0, algorithm_type: 0,
-            hash: 0..0, signature: 0..0, public_key: 100..104,
-            public_key_metadata: 0..0, descriptors: 0..100,
+            hash: 0..0, signature: 0..0, public_key: public_key_offset..public_key_end,
+            public_key_metadata: 0..0, descriptors: 0..descriptor_end,
             rollback_index: 9, flags: 0, rollback_index_location: location,
             release_string: String::new(),
         };
+        let total = u64::try_from(public_key_end).unwrap();
         let index = VbMetaImageIndex {
-            header, authentication_block: 0..0, auxiliary_block: 0..104,
+            header, authentication_block: 0..0, auxiliary_block: 0..public_key_end,
             descriptors, verification: crate::avb::AvbVerificationState::NotPerformed,
-            total_indexed_bytes: 104,
+            total_indexed_bytes: total,
         };
         (data, index)
     }
