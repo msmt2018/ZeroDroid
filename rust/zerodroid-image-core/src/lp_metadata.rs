@@ -332,6 +332,13 @@ fn parse_metadata_copy(
     for (index, group) in groups.iter().enumerate() {
         if group.maximum_size != 0 && group_totals[index] > group.maximum_size { return Err(ParseError::ResourceLimit); }
     }
+    let metadata_region_end = LP_RESERVED_BYTES
+        .checked_add((LP_GEOMETRY_SIZE as u64).checked_mul(2).ok_or(ParseError::IntegerOverflow)?)
+        .and_then(|v| v.checked_add(u64::from(geometry.metadata_max_size).checked_mul(u64::from(geometry.metadata_slot_count))?))
+        .ok_or(ParseError::IntegerOverflow)?;
+    let first_device = block_devices.first().ok_or(ParseError::InvalidBootHeader)?;
+    let first_logical_byte = first_device.first_logical_sector.checked_mul(LP_SECTOR_SIZE).ok_or(ParseError::IntegerOverflow)?;
+    if metadata_region_end > first_logical_byte { return Err(ParseError::OutOfBounds); }
 
     // Physical extents may not alias the same sectors on a block device.
     let mut physical = Vec::new();
@@ -396,7 +403,7 @@ mod tests {
         let device_offset=group_offset+48;
         put_u64(&mut data,device_offset,32);
         put_u32(&mut data,device_offset+8,4096);
-        put_u64(&mut data,device_offset+16,64*1024);
+        put_u64(&mut data,device_offset+16,128*1024);
         put_name(&mut data,device_offset+24,"super");
         let tables_size=52+24+48+64;
         let header=&mut data[metadata_offset..metadata_offset+LP_HEADER_V1_0_SIZE];
