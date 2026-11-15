@@ -34,6 +34,82 @@ pub struct AvbDescriptor {
     pub encoded: Range<usize>,
 }
 
+/// AVB Hash descriptor (tag 2). Variable data remains indexed in the original VBMeta buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AvbHashDescriptor {
+    pub image_size: u64,
+    pub hash_algorithm: String,
+    pub partition_name: String,
+    pub salt: Range<usize>,
+    pub digest: Range<usize>,
+    pub flags: u32,
+}
+
+/// Parses the typed fields of an AVB Hash descriptor without copying its salt or digest.
+pub fn parse_hash_descriptor(
+    data: &[u8],
+    descriptor: &AvbDescriptor,
+) -> Result<AvbHashDescriptor, AvbParseError> {
+    const TAG_HASH: u64 = 2;
+    const FIXED_BODY_SIZE: usize = 116;
+    if descriptor.tag != TAG_HASH || descriptor.body.len() < FIXED_BODY_SIZE {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    let body = data.get(descriptor.body.clone()).ok_or(AvbParseError::OutOfBounds)?;
+    let image_size = u64be(body, 0)?;
+    let algorithm_bytes = body.get(8..40).ok_or(AvbParseError::InvalidDescriptor)?;
+    let partition_len = usize::try_from(u32be(body, 40)?).map_err(|_| AvbParseError::IntegerOverflow)?;
+    let salt_len = usize::try_from(u32be(body, 44)?).map_err(|_| AvbParseError::IntegerOverflow)?;
+    let digest_len = usize::try_from(u32be(body, 48)?).map_err(|_| AvbParseError::IntegerOverflow)?;
+    let flags = u32be(body, 52)?;
+    if flags & !1 != 0 || body.get(56..116).ok_or(AvbParseError::InvalidDescriptor)?.iter().any(|b| *b != 0) {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+
+    let variable_len = partition_len.checked_add(salt_len).and_then(|v| v.checked_add(digest_len))
+        .ok_or(AvbParseError::IntegerOverflow)?;
+    let padded_len = variable_len.checked_add(7).ok_or(AvbParseError::IntegerOverflow)? & !7;
+    if FIXED_BODY_SIZE.checked_add(padded_len).ok_or(AvbParseError::IntegerOverflow)? != body.len() {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    let variable_start = descriptor.body.start.checked_add(FIXED_BODY_SIZE)
+        .ok_or(AvbParseError::IntegerOverflow)?;
+    let partition_end = variable_start.checked_add(partition_len).ok_or(AvbParseError::IntegerOverflow)?;
+    let salt_end = partition_end.checked_add(salt_len).ok_or(AvbParseError::IntegerOverflow)?;
+    let digest_end = salt_end.checked_add(digest_len).ok_or(AvbParseError::IntegerOverflow)?;
+    let padded_end = descriptor.body.end;
+    if data.get(digest_end..padded_end).ok_or(AvbParseError::OutOfBounds)?.iter().any(|b| *b != 0) {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+
+    let partition_name = core::str::from_utf8(data.get(variable_start..partition_end)
+        .ok_or(AvbParseError::OutOfBounds)?)
+        .map_err(|_| AvbParseError::InvalidDescriptor)?.to_owned();
+    if partition_name.is_empty() || partition_name.as_bytes().contains(&0) {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    let algorithm_end = algorithm_bytes.iter().position(|b| *b == 0).unwrap_or(algorithm_bytes.len());
+    if algorithm_bytes[algorithm_end..].iter().any(|b| *b != 0)
+        || !algorithm_bytes[..algorithm_end].iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_')
+    {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    let hash_algorithm = core::str::from_utf8(&algorithm_bytes[..algorithm_end])
+        .map_err(|_| AvbParseError::InvalidDescriptor)?.to_owned();
+    if hash_algorithm.is_empty() || (digest_len == 0 && !hash_algorithm.is_empty()) {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+
+    Ok(AvbHashDescriptor {
+        image_size,
+        hash_algorithm,
+        partition_name,
+        salt: partition_end..salt_end,
+        digest: salt_end..digest_end,
+        flags,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VbMetaHeader {
     pub required_major: u32,
@@ -297,6 +373,39 @@ mod tests {
         assert_eq!(parsed.descriptors.len(), 1);
         assert_eq!(parsed.descriptors[0].tag, 0);
         assert_eq!(parsed.verification, AvbVerificationState::NotPerformed);
+    }
+
+    #[test]
+    fn parses_hash_descriptor_fields_and_rejects_malformed_padding() {
+        let mut data = vbmeta();
+        // Replace the zero-sized descriptor with a tag-2 Hash descriptor.
+        data.resize(256 + 64 + 256, 0);
+        data[20..28].copy_from_slice(&256u64.to_be_bytes());
+        data[96..104].copy_from_slice(&48u64.to_be_bytes());
+        data[104..112].copy_from_slice(&144u64.to_be_bytes());
+        let start = 368usize;
+        data[start..start + 8].copy_from_slice(&2u64.to_be_bytes());
+        data[start + 8..start + 16].copy_from_slice(&128u64.to_be_bytes());
+        let body = start + 16;
+        data[body..body + 8].copy_from_slice(&4096u64.to_be_bytes());
+        data[body + 8..body + 12].copy_from_slice(b"sha256");
+        data[body + 40..body + 44].copy_from_slice(&4u32.to_be_bytes());
+        data[body + 44..body + 48].copy_from_slice(&2u32.to_be_bytes());
+        data[body + 48..body + 52].copy_from_slice(&4u32.to_be_bytes());
+        data[body + 116..body + 120].copy_from_slice(b"boot");
+        data[body + 120..body + 122].copy_from_slice(&[0xaa, 0xbb]);
+        data[body + 122..body + 126].copy_from_slice(&[1, 2, 3, 4]);
+        let parsed = parse_vbmeta(&data, budget()).unwrap();
+        let hash = parse_hash_descriptor(&data, &parsed.descriptors[0]).unwrap();
+        assert_eq!(hash.image_size, 4096);
+        assert_eq!(hash.hash_algorithm, "sha256");
+        assert_eq!(hash.partition_name, "boot");
+        assert_eq!(hash.salt, body + 120..body + 122);
+        assert_eq!(hash.digest, body + 122..body + 126);
+
+        data[body + 126] = 1;
+        let parsed = parse_vbmeta(&data, budget()).unwrap();
+        assert_eq!(parse_hash_descriptor(&data, &parsed.descriptors[0]), Err(AvbParseError::InvalidDescriptor));
     }
 
     #[test]
