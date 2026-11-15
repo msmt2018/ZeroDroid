@@ -2,6 +2,7 @@
 
 pub mod vendor_boot;
 pub mod gpt;
+pub mod lp_metadata;
 use core::ops::Range;
 const SPARSE_MAGIC:u32=0xed26_ff3a;
 const FILE_HEADER_SIZE:usize=28;
