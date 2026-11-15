@@ -95,14 +95,55 @@ fn align4(value: usize) -> Result<usize, FdtError> {
     value.checked_add(3).map(|v| v & !3).ok_or(FdtError::IntegerOverflow)
 }
 
-fn checked_block(offset: u32, size: u32, total: usize) -> Result<Range<usize>, FdtError> {
+fn checked_block(offset: u32, size: u32, total: usize, header_size: usize) -> Result<Range<usize>, FdtError> {
     let start = usize::try_from(offset).map_err(|_| FdtError::IntegerOverflow)?;
     let length = usize::try_from(size).map_err(|_| FdtError::IntegerOverflow)?;
     let end = start.checked_add(length).ok_or(FdtError::IntegerOverflow)?;
-    if start < FDT_HEADER_SIZE || end > total {
+    if start < header_size || end > total {
         return Err(FdtError::InvalidRange);
     }
     Ok(start..end)
+}
+
+fn scan_fdt_structure_end(data: &[u8], start: usize, limit: usize) -> Result<usize, FdtError> {
+    let mut cursor = start;
+    let mut depth = 0usize;
+    let mut saw_root = false;
+    while cursor.checked_add(4).ok_or(FdtError::IntegerOverflow)? <= limit {
+        let token = be32(data, cursor)?;
+        cursor = cursor.checked_add(4).ok_or(FdtError::IntegerOverflow)?;
+        match token {
+            FDT_BEGIN_NODE => {
+                let tail = data.get(cursor..limit).ok_or(FdtError::Truncated)?;
+                let name_end = tail.iter().position(|byte| *byte == 0).ok_or(FdtError::InvalidStructure)?;
+                if !saw_root && name_end != 0 { return Err(FdtError::InvalidStructure); }
+                let raw_end = cursor.checked_add(name_end).and_then(|v| v.checked_add(1))
+                    .ok_or(FdtError::IntegerOverflow)?;
+                cursor = align4(raw_end)?;
+                if cursor > limit { return Err(FdtError::Truncated); }
+                depth = depth.checked_add(1).ok_or(FdtError::IntegerOverflow)?;
+                saw_root = true;
+            }
+            FDT_END_NODE => {
+                if depth == 0 { return Err(FdtError::InvalidStructure); }
+                depth -= 1;
+            }
+            FDT_PROP => {
+                if depth == 0 { return Err(FdtError::InvalidStructure); }
+                let length = usize::try_from(be32(data, cursor)?).map_err(|_| FdtError::IntegerOverflow)?;
+                cursor = cursor.checked_add(8).ok_or(FdtError::IntegerOverflow)?;
+                cursor = align4(cursor.checked_add(length).ok_or(FdtError::IntegerOverflow)?)?;
+                if cursor > limit { return Err(FdtError::Truncated); }
+            }
+            FDT_NOP => {}
+            FDT_END => {
+                if !saw_root || depth != 0 { return Err(FdtError::InvalidStructure); }
+                return Ok(cursor);
+            }
+            _ => return Err(FdtError::InvalidStructure),
+        }
+    }
+    Err(FdtError::Truncated)
 }
 
 fn c_string(bytes: &[u8]) -> Result<&str, FdtError> {
@@ -146,39 +187,58 @@ fn string_list(bytes: &[u8]) -> Result<Vec<String>, FdtError> {
 pub fn parse_fdt(data: &[u8], budget: ParseBudget) -> Result<FdtIndex, FdtError> {
     budget.check_input(u64::try_from(data.len()).map_err(|_| FdtError::IntegerOverflow)?)
         .map_err(|_| FdtError::ResourceLimit)?;
-    if data.len() < FDT_HEADER_SIZE {
+    if data.len() < 36 {
         return Err(FdtError::Truncated);
     }
     if be32(data, 0)? != FDT_MAGIC {
         return Err(FdtError::InvalidMagic);
     }
-    let header = FdtHeader {
-        total_size: be32(data, 4)?,
-        version: be32(data, 20)?,
-        last_compatible_version: be32(data, 24)?,
-        boot_cpuid_phys: be32(data, 28)?,
-        strings_size: be32(data, 32)?,
-        structure_size: be32(data, 36)?,
+    let version = be32(data, 20)?;
+    let header_size = match version {
+        16 => 36usize,
+        17 => FDT_HEADER_SIZE,
+        _ => return Err(FdtError::UnsupportedVersion),
     };
-    if header.version != 17
-        || header.last_compatible_version > 17
-        || header.last_compatible_version > header.version
-    {
+    if data.len() < header_size { return Err(FdtError::Truncated); }
+    let total_size = be32(data, 4)?;
+    let total = usize::try_from(total_size).map_err(|_| FdtError::IntegerOverflow)?;
+    if total < header_size || total > data.len() { return Err(FdtError::InvalidHeader); }
+    let last_compatible_version = be32(data, 24)?;
+    if last_compatible_version > version || last_compatible_version > 17 {
         return Err(FdtError::UnsupportedVersion);
     }
-    let total = usize::try_from(header.total_size).map_err(|_| FdtError::IntegerOverflow)?;
-    if total < FDT_HEADER_SIZE || total > data.len() {
-        return Err(FdtError::InvalidHeader);
-    }
-    let struct_range = checked_block(be32(data, 8)?, header.structure_size, total)?;
-    let strings_range = checked_block(be32(data, 12)?, header.strings_size, total)?;
-    if struct_range.start % 4 != 0 || header.structure_size % 4 != 0 {
-        return Err(FdtError::InvalidHeader);
-    }
+    let structure_offset = be32(data, 8)?;
+    let strings_offset = be32(data, 12)?;
     let reserve_start = usize::try_from(be32(data, 16)?).map_err(|_| FdtError::IntegerOverflow)?;
-    if reserve_start < FDT_HEADER_SIZE || reserve_start % 8 != 0 || reserve_start >= total {
+    let strings_size = be32(data, 32)?;
+    let strings_range = checked_block(strings_offset, strings_size, total, header_size)?;
+    let struct_start = usize::try_from(structure_offset).map_err(|_| FdtError::IntegerOverflow)?;
+    if struct_start < header_size || struct_start % 4 != 0 || struct_start >= total {
+        return Err(FdtError::InvalidRange);
+    }
+    if reserve_start < header_size || reserve_start % 8 != 0 || reserve_start >= total {
         return Err(FdtError::InvalidReservationMap);
     }
+    let structure_size = if version == 17 {
+        be32(data, 36)?
+    } else {
+        let boundary = [strings_range.start, reserve_start, total].into_iter()
+            .filter(|offset| *offset > struct_start).min().ok_or(FdtError::InvalidRange)?;
+        let end = scan_fdt_structure_end(data, struct_start, boundary)?;
+        u32::try_from(end - struct_start).map_err(|_| FdtError::IntegerOverflow)?
+    };
+    let struct_range = checked_block(structure_offset, structure_size, total, header_size)?;
+    if struct_range.start % 4 != 0 || structure_size % 4 != 0 {
+        return Err(FdtError::InvalidHeader);
+    }
+    let header = FdtHeader {
+        total_size,
+        version,
+        last_compatible_version,
+        boot_cpuid_phys: be32(data, 28)?,
+        structure_size,
+        strings_size,
+    };
     let mut reservations = Vec::new();
     let mut reserve_cursor = reserve_start;
     loop {
@@ -1392,6 +1452,35 @@ fn validate_overlay_resolutions(
     Ok(())
 }
 
+/// Combines reservation maps conservatively. Exact duplicates are deduplicated;
+/// overlapping ranges are rejected because their ownership cannot be inferred.
+fn merge_reservation_maps(
+    base: &[FdtReservation],
+    overlay: &[FdtReservation],
+    budget: ParseBudget,
+) -> Result<Vec<FdtReservation>, FdtError> {
+    let total = base.len().checked_add(overlay.len()).ok_or(FdtError::IntegerOverflow)?;
+    if total > budget.max_items as usize { return Err(FdtError::ResourceLimit); }
+    let mut merged = Vec::with_capacity(total);
+    merged.extend_from_slice(base);
+    merged.extend_from_slice(overlay);
+    for entry in &merged {
+        if entry.size == 0 || entry.address.checked_add(entry.size).is_none() {
+            return Err(FdtError::InvalidReservationMap);
+        }
+    }
+    merged.sort_unstable_by_key(|entry| (entry.address, entry.size));
+    merged.dedup_by(|left, right| left.address == right.address && left.size == right.size);
+    for pair in merged.windows(2) {
+        let previous_end = pair[0].address.checked_add(pair[0].size)
+            .ok_or(FdtError::InvalidReservationMap)?;
+        if pair[1].address < previous_end {
+            return Err(FdtError::InvalidReservationMap);
+        }
+    }
+    Ok(merged)
+}
+
 /// Materializes a bounded, owned tree and applies the already-resolved fragment
 /// subtrees in fragment order. This is the merge stage only: serialization into a
 /// new DTB; exported symbol rewriting is included in the returned owned tree.
@@ -1416,9 +1505,6 @@ pub fn merge_overlay_fragments(
     // The Linux overlay application model does not merge an overlay's
     // reservation map into the live tree. Reject rather than silently discard
     // reservations that may describe memory the guest must keep unavailable.
-    if !overlay.reservations.is_empty() {
-        return Err(FdtError::InvalidReservationMap);
-    }
     validate_overlay_resolutions(base_data, base, overlay_data, overlay, resolutions, budget)?;
     if base.nodes.is_empty() || overlay.nodes.is_empty()
         || base.nodes.len().checked_add(overlay.nodes.len()).ok_or(FdtError::IntegerOverflow)?
@@ -1560,8 +1646,9 @@ pub fn merge_overlay_fragments(
             Ok(value.to_owned())
         }).transpose()?;
 
+    let reservations = merge_reservation_maps(&base.reservations, &overlay.reservations, budget)?;
     let mut merged = FdtMergedTree {
-        reservations: base.reservations.clone(),
+        reservations,
         boot_cpuid_phys: base.header.boot_cpuid_phys,
         nodes,
         root_compatible: compatible,
