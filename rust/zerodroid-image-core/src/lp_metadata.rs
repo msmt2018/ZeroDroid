@@ -183,8 +183,11 @@ pub fn parse_lp_metadata(data: &[u8], slot_number: u32, budget: ParseBudget) -> 
     let input_size = u64::try_from(data.len()).map_err(|_|ParseError::IntegerOverflow)?;
     budget.check_input(input_size)?;
     // AOSP layout: 4 KiB reserved prefix, then two 4 KiB geometry blocks.
-    let geometry = parse_geometry(data, LP_RESERVED_BYTES as usize)
-        .or_else(|_| parse_geometry(data, LP_RESERVED_BYTES as usize + LP_GEOMETRY_SIZE))?;
+    let geometry = match parse_geometry(data, LP_RESERVED_BYTES as usize) {
+        Ok(value) => value,
+        Err(primary_error) => parse_geometry(data, LP_RESERVED_BYTES as usize + LP_GEOMETRY_SIZE)
+            .map_err(|_| primary_error)?,
+    };
     if slot_number >= geometry.metadata_slot_count { return Err(ParseError::OutOfBounds); }
     let slots = u64::from(geometry.metadata_slot_count);
     let max_size = u64::from(geometry.metadata_max_size);
@@ -192,9 +195,10 @@ pub fn parse_lp_metadata(data: &[u8], slot_number: u32, budget: ParseBudget) -> 
         .checked_add((LP_GEOMETRY_SIZE as u64).checked_mul(2).ok_or(ParseError::IntegerOverflow)?)
         .and_then(|v| v.checked_add(max_size.checked_mul(u64::from(slot_number))?))
         .ok_or(ParseError::IntegerOverflow)?;
-    let backup_distance = max_size.checked_mul(slots - u64::from(slot_number)).ok_or(ParseError::IntegerOverflow)?;
-    let image_len = input_size;
-    let backup_offset = image_len.checked_sub(backup_distance).ok_or(ParseError::OutOfBounds)?;
+    // AOSP liblp stores all backup metadata slots after the primary slot array.
+    let backup_offset = primary_offset
+        .checked_add(max_size.checked_mul(slots).ok_or(ParseError::IntegerOverflow)?)
+        .ok_or(ParseError::IntegerOverflow)?;
     let primary = usize::try_from(primary_offset).map_err(|_|ParseError::IntegerOverflow)?;
     let backup = usize::try_from(backup_offset).map_err(|_|ParseError::IntegerOverflow)?;
     let parse = |offset: usize| parse_metadata_copy(data, offset, geometry.clone(), slot_number, budget);
@@ -223,6 +227,10 @@ fn parse_metadata_copy(
     let tables_size_u64 = u64::from(tables_size);
     if tables_size_u64 > u64::from(budget.max_input_bytes) { return Err(ParseError::ResourceLimit); }
     let tables_start = header_end;
+    if u64::from(header_size as u32).checked_add(tables_size_u64).ok_or(ParseError::IntegerOverflow)?
+        > u64::from(geometry.metadata_max_size) {
+        return Err(ParseError::ResourceLimit);
+    }
     let tables_end = tables_start.checked_add(tables_size as usize).ok_or(ParseError::IntegerOverflow)?;
     let tables = data.get(tables_start..tables_end).ok_or(ParseError::OutOfBounds)?;
     if sha256(tables) != header[48..80] { return Err(ParseError::ChecksumMismatch); }
@@ -231,6 +239,12 @@ fn parse_metadata_copy(
     let extents_desc = parse_descriptor(header,92)?;
     let groups_desc = parse_descriptor(header,104)?;
     let devices_desc = parse_descriptor(header,116)?;
+    if partitions_desc.entry_size != LP_PARTITION_ENTRY_SIZE
+        || extents_desc.entry_size != LP_EXTENT_ENTRY_SIZE
+        || groups_desc.entry_size != LP_GROUP_ENTRY_SIZE
+        || devices_desc.entry_size != LP_BLOCK_DEVICE_ENTRY_SIZE {
+        return Err(ParseError::InvalidHeaderSize);
+    }
     let partitions_range = table_range(partitions_desc,tables_size,LP_PARTITION_ENTRY_SIZE)?;
     let extents_range = table_range(extents_desc,tables_size,LP_EXTENT_ENTRY_SIZE)?;
     let groups_range = table_range(groups_desc,tables_size,LP_GROUP_ENTRY_SIZE)?;
@@ -240,12 +254,18 @@ fn parse_metadata_copy(
     for pair in ranges.windows(2) {
         if pair[0].end > pair[1].start { return Err(ParseError::InvalidBootHeader); }
     }
+    if ranges.first().is_some_and(|r| r.start != 0)
+        || ranges.last().is_some_and(|r| r.end != tables_size as usize) {
+        return Err(ParseError::InvalidBootHeader);
+    }
     let total_items = partitions_desc.num_entries.checked_add(extents_desc.num_entries)
         .and_then(|v|v.checked_add(groups_desc.num_entries)).and_then(|v|v.checked_add(devices_desc.num_entries))
         .ok_or(ParseError::IntegerOverflow)?;
     budget.check_items(total_items)?;
     if devices_desc.num_entries == 0 { return Err(ParseError::InvalidBootHeader); }
 
+    if groups_desc.num_entries == 0 { return Err(ParseError::InvalidBootHeader); }
+    let mut group_names = std::collections::HashSet::new();
     let mut groups = Vec::with_capacity(groups_desc.num_entries as usize);
     for i in 0..groups_desc.num_entries as usize {
         let p = groups_range.start + i * groups_desc.entry_size as usize;
@@ -254,9 +274,10 @@ fn parse_metadata_copy(
         let flags = u32le(row,36)?;
         let maximum_size = u64le(row,40)?;
         if flags & !LP_GROUP_SLOT_SUFFIXED != 0 { return Err(ParseError::InvalidBootHeader); }
-        if groups.iter().any(|g:LpGroup|g.name==name) { return Err(ParseError::InvalidBootHeader); }
+        if !group_names.insert(name.clone()) { return Err(ParseError::InvalidBootHeader); }
         groups.push(LpGroup{name,flags,maximum_size});
     }
+    let mut device_names = std::collections::HashSet::new();
     let mut block_devices = Vec::with_capacity(devices_desc.num_entries as usize);
     for i in 0..devices_desc.num_entries as usize {
         let p = devices_range.start + i * devices_desc.entry_size as usize;
@@ -270,7 +291,7 @@ fn parse_metadata_copy(
             || device.flags & !LP_BLOCK_DEVICE_SLOT_SUFFIXED != 0
             || device.first_logical_sector.checked_mul(LP_SECTOR_SIZE).ok_or(ParseError::IntegerOverflow)? >= device.size
         { return Err(ParseError::InvalidBootHeader); }
-        if block_devices.iter().any(|d:LpBlockDevice|d.partition_name==device.partition_name) { return Err(ParseError::InvalidBootHeader); }
+        if !device_names.insert(device.partition_name.clone()) { return Err(ParseError::InvalidBootHeader); }
         block_devices.push(device);
     }
 
@@ -300,8 +321,9 @@ fn parse_metadata_copy(
         extents.push(LpExtent{num_sectors,target_type,target_data,target_source,physical_range_sectors});
     }
 
+    let mut partition_names = std::collections::HashSet::new();
     let mut partitions = Vec::with_capacity(partitions_desc.num_entries as usize);
-    let mut claimed_extent_indices = Vec::new();
+    let mut claimed_extent_indices = vec![false; extents.len()];
     let mut group_totals = vec![0_u64; groups.len()];
     for i in 0..partitions_desc.num_entries as usize {
         let p = partitions_range.start + i * partitions_desc.entry_size as usize;
@@ -315,10 +337,11 @@ fn parse_metadata_copy(
         if attributes & !LP_PARTITION_ATTRIBUTE_MASK != 0 || num_extents == 0
             || end_index > extents_desc.num_entries || group_index as usize >= groups.len()
         { return Err(ParseError::OutOfBounds); }
-        if partitions.iter().any(|part:LpPartition|part.name==name) { return Err(ParseError::InvalidBootHeader); }
+        if !partition_names.insert(name.clone()) { return Err(ParseError::InvalidBootHeader); }
         for index in first_extent_index..end_index {
-            if claimed_extent_indices.contains(&index) { return Err(ParseError::InvalidBootHeader); }
-            claimed_extent_indices.push(index);
+            let claimed = claimed_extent_indices.get_mut(index as usize).ok_or(ParseError::OutOfBounds)?;
+            if *claimed { return Err(ParseError::InvalidBootHeader); }
+            *claimed = true;
         }
         let mut logical_sectors = 0_u64;
         for extent in &extents[first_extent_index as usize..end_index as usize] {
@@ -328,7 +351,7 @@ fn parse_metadata_copy(
         group_totals[group_index as usize] = group_totals[group_index as usize].checked_add(logical_bytes).ok_or(ParseError::IntegerOverflow)?;
         partitions.push(LpPartition{name,attributes,first_extent_index,num_extents,group_index,logical_sectors});
     }
-    if claimed_extent_indices.len() != extents.len() { return Err(ParseError::InvalidBootHeader); }
+    if claimed_extent_indices.iter().any(|claimed| !claimed) { return Err(ParseError::InvalidBootHeader); }
     for (index, group) in groups.iter().enumerate() {
         if group.maximum_size != 0 && group_totals[index] > group.maximum_size { return Err(ParseError::ResourceLimit); }
     }
@@ -434,6 +457,21 @@ mod tests {
         assert_eq!(parsed.partitions[0].logical_sectors,128);
         assert_eq!(parsed.extents[0].physical_range_sectors,Some(64..192));
         assert_eq!(parsed.block_devices[0].partition_name,"super");
+    }
+
+    #[test]
+    fn falls_back_to_backup_geometry_and_metadata_copy(){
+        let mut data=valid_super();
+        let geometry=data[4096..4096+LP_GEOMETRY_STRUCT_SIZE].to_vec();
+        data[8192..8192+LP_GEOMETRY_STRUCT_SIZE].copy_from_slice(&geometry);
+        data[4096+8]^=1;
+        let backup_metadata_offset=12288+4096;
+        let primary_metadata=data[12288..12288+4096].to_vec();
+        data[backup_metadata_offset..backup_metadata_offset+4096].copy_from_slice(&primary_metadata);
+        data[12288+12]^=1;
+        let parsed=parse_lp_metadata(&data,0,budget()).unwrap();
+        assert_eq!(parsed.partitions[0].name,"system");
+        assert_eq!(parsed.metadata_copy_range.start,backup_metadata_offset);
     }
 
     #[test]
