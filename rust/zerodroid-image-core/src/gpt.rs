@@ -159,7 +159,7 @@ pub fn parse_primary_gpt(
         .ok_or(ParseError::IntegerOverflow)?;
     let array_offset = partition_entry_lba.checked_mul(sector).ok_or(ParseError::IntegerOverflow)?;
     let array_end = array_offset.checked_add(array_size).ok_or(ParseError::IntegerOverflow)?;
-    if partition_entry_lba < 2 || array_end > disk_size || array_end > backup_lba.checked_mul(sector).ok_or(ParseError::IntegerOverflow)? {
+    let first_usable_byte = first_usable_lba.checked_mul(sector).ok_or(ParseError::IntegerOverflow)?;\n    if partition_entry_lba < 2 || array_end > disk_size || array_end > first_usable_byte || array_end > backup_lba.checked_mul(sector).ok_or(ParseError::IntegerOverflow)? {
         return Err(ParseError::OutOfBounds);
     }
     let array_start_usize = usize::try_from(array_offset).map_err(|_| ParseError::IntegerOverflow)?;
