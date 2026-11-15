@@ -96,7 +96,7 @@ pub fn parse_hash_descriptor(
     }
     let hash_algorithm = core::str::from_utf8(&algorithm_bytes[..algorithm_end])
         .map_err(|_| AvbParseError::InvalidDescriptor)?.to_owned();
-    if hash_algorithm.is_empty() || (digest_len == 0 && !hash_algorithm.is_empty()) {
+    if hash_algorithm.is_empty() {
         return Err(AvbParseError::InvalidDescriptor);
     }
 
