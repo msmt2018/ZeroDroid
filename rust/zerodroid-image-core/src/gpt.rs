@@ -159,7 +159,8 @@ pub fn parse_primary_gpt(
         .ok_or(ParseError::IntegerOverflow)?;
     let array_offset = partition_entry_lba.checked_mul(sector).ok_or(ParseError::IntegerOverflow)?;
     let array_end = array_offset.checked_add(array_size).ok_or(ParseError::IntegerOverflow)?;
-    let first_usable_byte = first_usable_lba.checked_mul(sector).ok_or(ParseError::IntegerOverflow)?;\n    if partition_entry_lba < 2 || array_end > disk_size || array_end > first_usable_byte || array_end > backup_lba.checked_mul(sector).ok_or(ParseError::IntegerOverflow)? {
+    let first_usable_byte = first_usable_lba.checked_mul(sector).ok_or(ParseError::IntegerOverflow)?;
+    if partition_entry_lba < 2 || array_end > disk_size || array_end > first_usable_byte || array_end > backup_lba.checked_mul(sector).ok_or(ParseError::IntegerOverflow)? {
         return Err(ParseError::OutOfBounds);
     }
     let array_start_usize = usize::try_from(array_offset).map_err(|_| ParseError::IntegerOverflow)?;
@@ -326,7 +327,8 @@ mod tests {
     fn rejects_duplicate_unique_partition_guids() {
         let mut disk = valid_disk();
         let second = 2 * 512 + 128;
-        let duplicate_guid = disk[2 * 512 + 16..2 * 512 + 32].to_vec();\n        disk[second..second + 16].copy_from_slice(&duplicate_guid);
+        let duplicate_guid = disk[2 * 512 + 16..2 * 512 + 32].to_vec();
+        disk[second..second + 16].copy_from_slice(&duplicate_guid);
         disk[second + 32..second + 40].copy_from_slice(&60_u64.to_le_bytes());
         disk[second + 40..second + 48].copy_from_slice(&69_u64.to_le_bytes());
         put_u32(&mut disk, 512 + 80, 2);
