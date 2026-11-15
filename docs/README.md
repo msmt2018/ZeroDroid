@@ -46,6 +46,7 @@
 38. [Boot Material Set 与启动材料组合索引](38-boot-material-set-and-boot-chain-index.md)
 39. [FDT/DTB 结构索引与 DTBO Overlay 路由元数据](39-fdt-dtb-and-dtbo-overlay-index.md)
 40. [DTBO External/Local Fixup 只读计划](40-dtbo-external-local-fixup-plan.md)
+41. [DTBO Overlay 有界拥有树合并](41-dtbo-overlay-merge-owned-tree.md)
 
 ## 设计基线
 
