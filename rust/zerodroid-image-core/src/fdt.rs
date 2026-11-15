@@ -1262,6 +1262,51 @@ pub struct FdtMergedTree {
     pub model: Option<String>,
 }
 
+/// One already-indexed and fixup-prepared overlay in an ordered DTBO transaction.
+#[derive(Debug, Clone, Copy)]
+pub struct FdtOverlayBatchEntry<'a> {
+    pub data: &'a [u8],
+    pub index: &'a FdtIndex,
+    pub resolutions: &'a [FdtOverlayResolution],
+}
+
+/// Applies prepared overlays in order. Each successful intermediate tree is
+/// serialized and reparsed before the next overlay, so the next resolution set
+/// must refer to the accumulated tree. No partial tree is returned on failure.
+pub fn merge_overlay_sequence(
+    base_data: &[u8],
+    base: &FdtIndex,
+    overlays: &[FdtOverlayBatchEntry<'_>],
+    budget: ParseBudget,
+) -> Result<FdtMergedTree, FdtError> {
+    if overlays.is_empty() || overlays.len() > budget.max_items as usize {
+        return Err(FdtError::ResourceLimit);
+    }
+    budget.check_input(u64::try_from(base_data.len()).map_err(|_| FdtError::IntegerOverflow)?)
+        .map_err(|_| FdtError::ResourceLimit)?;
+    let mut current_data = base_data.to_vec();
+    let mut current_index = base.clone();
+    let mut final_tree = None;
+
+    for entry in overlays {
+        let combined_input = current_data.len().checked_add(entry.data.len())
+            .ok_or(FdtError::IntegerOverflow)?;
+        if combined_input > budget.max_input_bytes as usize {
+            return Err(FdtError::ResourceLimit);
+        }
+        let merged = merge_overlay_fragments(
+            &current_data, &current_index, entry.data, entry.index,
+            entry.resolutions, budget,
+        )?;
+        let serialized = serialize_fdt_v17(&merged, budget)?;
+        let reparsed = parse_fdt(&serialized, budget)?;
+        current_data = serialized;
+        current_index = reparsed;
+        final_tree = Some(merged);
+    }
+    final_tree.ok_or(FdtError::InvalidStructure)
+}
+
 /// Materializes a bounded, owned tree and applies the already-resolved fragment
 /// subtrees in fragment order. This is the merge stage only: serialization into a
 /// new DTB and symbol export rewriting are deliberately separate operations.
