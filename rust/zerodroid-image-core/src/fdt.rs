@@ -2396,17 +2396,41 @@ mod overlay_merge_pipeline_tests {
             ],
             root_compatible: vec![], model: None,
         };
+        let second_overlay_tree = FdtMergedTree {
+            reservations: vec![], boot_cpuid_phys: 0,
+            nodes: vec![
+                node("", "/", None, vec![]),
+                node("fragment@0", "/fragment@0", Some(0), vec![
+                    prop("target-path", b"/soc/dev\0"),
+                ]),
+                node("__overlay__", "/fragment@0/__overlay__", Some(1), vec![]),
+                node("child", "/fragment@0/__overlay__/child", Some(2), vec![
+                    prop("phandle", &1_u32.to_be_bytes()),
+                    prop("link", &1_u32.to_be_bytes()),
+                ]),
+                node("__local_fixups__", "/__local_fixups__", Some(0), vec![]),
+                node("fragment@0", "/__local_fixups__/fragment@0", Some(4), vec![]),
+                node("__overlay__", "/__local_fixups__/fragment@0/__overlay__", Some(5), vec![]),
+                node("child", "/__local_fixups__/fragment@0/__overlay__/child", Some(6), vec![
+                    prop("link", &0_u32.to_be_bytes()),
+                ]),
+            ],
+            root_compatible: vec![], model: None,
+        };
         let base = serialize_fdt_v17(&base_tree, budget()).unwrap();
         let overlay = serialize_fdt_v17(&overlay_tree, budget()).unwrap();
-        let output = apply_dtbo_sequence(&base, &[&overlay], budget()).unwrap();
+        let second_overlay = serialize_fdt_v17(&second_overlay_tree, budget()).unwrap();
+        let output = apply_dtbo_sequence(&base, &[&overlay, &second_overlay], budget()).unwrap();
         let parsed = parse_fdt(&output, budget()).unwrap();
-        let dev = parsed.nodes.iter().find(|n| n.path == "/soc/dev").unwrap();
-        let read = |name: &str| {
-            let property = dev.properties.iter().find(|p| p.name == name).unwrap();
+        let read = |path: &str, name: &str| {
+            let node = parsed.nodes.iter().find(|n| n.path == path).unwrap();
+            let property = node.properties.iter().find(|p| p.name == name).unwrap();
             be32(&output, property.value.start).unwrap()
         };
-        assert_eq!(read("phandle"), 101);
-        assert_eq!(read("link"), 101);
+        assert_eq!(read("/soc/dev", "phandle"), 101);
+        assert_eq!(read("/soc/dev", "link"), 101);
+        assert_eq!(read("/soc/dev/child", "phandle"), 102);
+        assert_eq!(read("/soc/dev/child", "link"), 102);
     }
 
     #[test]
