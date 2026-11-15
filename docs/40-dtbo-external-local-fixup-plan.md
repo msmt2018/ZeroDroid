@@ -27,7 +27,7 @@
 - External/Local fixup 条目共受 `ParseBudget.max_items` 限制。
 - 所有输入 property range 都必须落在调用方提供的原始字节切片内。
 - 所有 offset、range end 和 phandle 加法使用边界检查或 checked arithmetic。
-- 目前没有执行 fixup 写回、overlay merge、symbol export 合并或最终 FDT 再解析。
+- `apply_dtbo_sequence` 已将 fixup 计划、统一写入集、私有缓冲区原子写回、写回后重新解析串联为执行路径；该 API 仍不验证 AVB 签名，也不证明 Guest 可启动。
 - 计划生成成功不代表 DTBO 已应用，也不代表 Guest 设备树可启动。
 
 
