@@ -74,6 +74,7 @@ pub struct PartitionCatalog {
     pub avb_references: Vec<AvbPartitionReference>,
     pub chain_edges: Vec<AvbChainEdge>,
     pub duplicate_normalized_names: Vec<String>,
+    pub duplicate_gpt_names: Vec<String>,
     pub missing_avb_partitions: Vec<String>,
     pub verification: crate::avb::AvbVerificationState,
 }
@@ -141,8 +142,11 @@ pub fn build_partition_catalog(
     if estimated > max_items { return Err(CatalogError::ResourceLimit); }
 
     let mut entries: BTreeMap<String, CatalogPartition> = BTreeMap::new();
+    let mut seen_gpt_names = BTreeSet::new();
+    let mut duplicate_gpt_names = BTreeSet::new();
     for partition in &gpt.partitions {
         let name = gpt_name(&partition.name_utf16le)?;
+        if !seen_gpt_names.insert(name.clone()) { duplicate_gpt_names.insert(name.clone()); }
         let normalized_name = normalize_slot(&name, slot);
         entries.entry(name.clone()).or_insert_with(|| CatalogPartition {
             name, normalized_name, sources: Vec::new(),
@@ -220,6 +224,7 @@ pub fn build_partition_catalog(
         avb_references: references,
         chain_edges,
         duplicate_normalized_names,
+        duplicate_gpt_names: duplicate_gpt_names.into_iter().collect(),
         missing_avb_partitions: missing.into_iter().collect(),
         verification: vbmeta.verification,
     })
