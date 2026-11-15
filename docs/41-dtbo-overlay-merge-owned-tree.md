@@ -71,11 +71,12 @@ pub fn apply_dtbo_sequence(
 - 伪造 resolution、空 resolution、过期索引拒绝。
 - Overlay symbol export 路径重写。
 
-## 尚待外部验证的工作
+## 外部互操作验证
 
-- 导入真实 dtc/libfdt 生成的 v16/v17 DTB 和 DTBO fixtures。
-- 与目标版本 Linux libfdt 的差分测试，覆盖多 fragment、external/local fixup、phandle relocation、symbols 和 reservation map。
-- 将合并结果接入 Guest Platform Profile，验证 CPU、memory、GIC、timer、PSCI、UART、VirtIO-MMIO 的地址区间、IRQ、phandle 引用和设备依赖。
+CI 现在安装 device-tree-compiler，使用仓库中的 `tests/fixtures-dtc/base.dts` 与 `overlay.dtso` 通过 `dtc -@` 实时生成真实 DTB/DTBO，并运行集成测试验证 external fixup、local fixup、phandle 声明与引用 relocation、fragment merge 和 `__symbols__` 导出路径。
+
+仍需与目标版本 Linux libfdt 执行更广泛的差分测试，覆盖多 fragment、reservation map 和更多真实设备树样本。
+
 - 将验证结果接入 Boot Material Set 和启动链策略。
 
 这些是外部互操作和 Guest 平台语义验证，不应与本模块内部事务实现混为一谈。
