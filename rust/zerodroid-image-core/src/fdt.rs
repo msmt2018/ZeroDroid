@@ -1918,7 +1918,7 @@ mod overlay_merge_pipeline_tests {
     }
 
     #[test]
-    fn overlay_symbols_are_rewritten_and_conflicts_rejected() {
+    fn overlay_symbols_are_rewritten_to_merged_paths() {
         let base_tree = FdtMergedTree {
             reservations: vec![], boot_cpuid_phys: 0,
             nodes: vec![
