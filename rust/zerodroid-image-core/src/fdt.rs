@@ -2021,7 +2021,7 @@ mod overlay_merge_pipeline_tests {
     fn rejects_overlay_reservation_entries_instead_of_silently_dropping_them() {
         let base_tree = FdtMergedTree {
             reservations: vec![], boot_cpuid_phys: 0,
-            nodes: vec![node("", "/", None, vec![prop("compatible", b"vendor,base\\0")])],
+            nodes: vec![node("", "/", None, vec![prop("compatible", b"vendor,base\0")])],
             root_compatible: vec!["vendor,base".to_owned()], model: None,
         };
         let overlay_tree = FdtMergedTree {
@@ -2029,7 +2029,7 @@ mod overlay_merge_pipeline_tests {
             boot_cpuid_phys: 0,
             nodes: vec![
                 node("", "/", None, vec![]),
-                node("fragment@0", "/fragment@0", Some(0), vec![prop("target-path", b"/\\0")]),
+                node("fragment@0", "/fragment@0", Some(0), vec![prop("target-path", b"/\0")]),
                 node("__overlay__", "/fragment@0/__overlay__", Some(1), vec![]),
             ],
             root_compatible: vec![], model: None,
