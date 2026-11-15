@@ -277,7 +277,6 @@ pub struct VbMetaChainGraph {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChainGraphError {
     EmptyPartitionName,
-    DuplicateInputLimit,
     ResourceLimit,
     Avb(AvbParseError),
 }
@@ -323,12 +322,10 @@ pub fn build_vbmeta_chain_graph(
     let mut missing_targets = BTreeSet::new();
     let mut adjacency = vec![Vec::<usize>::new(); nodes.len()];
 
+    let mut processed_sources = BTreeSet::new();
     for input in inputs {
         let source_normalized = normalize_slot(input.partition_name, slot);
-        if inputs.iter().take_while(|candidate| !core::ptr::eq(*candidate, input))
-            .any(|candidate| normalize_slot(candidate.partition_name, slot) == source_normalized) {
-            continue;
-        }
+        if !processed_sources.insert(source_normalized.clone()) { continue; }
         let Some(&from_index) = names.get(&source_normalized) else { continue };
         if nodes[from_index].partition_name != input.partition_name { continue; }
 
@@ -414,7 +411,7 @@ mod tests {
     use super::*;
 
     fn synthetic_vbmeta(partition: &str, target: Option<&str>, key: [u8; 4], location: u32) -> (Vec<u8>, VbMetaImageIndex) {
-        let mut data = vec![0_u8; 100];
+        let mut data = vec![0_u8; 104];
         let mut descriptors = Vec::new();
         if let Some(target) = target {
             let name = target.as_bytes();
@@ -429,18 +426,19 @@ mod tests {
                 tag: 4, body: 16..100, encoded: 0..100, vbmeta_minor: 2,
             });
         }
+        data[100..104].copy_from_slice(&key);
         let header = crate::avb::VbMetaHeader {
             required_major: 1, required_minor: 2,
             authentication_block_size: 0, auxiliary_block_size: 0, algorithm_type: 0,
-            hash: 0..0, signature: 0..0, public_key: 0..0,
+            hash: 0..0, signature: 0..0, public_key: 100..104,
             public_key_metadata: 0..0, descriptors: 0..100,
             rollback_index: 9, flags: 0, rollback_index_location: location,
             release_string: String::new(),
         };
         let index = VbMetaImageIndex {
-            header, authentication_block: 0..0, auxiliary_block: 0..100,
+            header, authentication_block: 0..0, auxiliary_block: 0..104,
             descriptors, verification: crate::avb::AvbVerificationState::NotPerformed,
-            total_indexed_bytes: 100,
+            total_indexed_bytes: 104,
         };
         let _ = partition;
         (data, index)
