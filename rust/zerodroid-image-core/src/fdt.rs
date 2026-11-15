@@ -2232,6 +2232,32 @@ mod overlay_merge_pipeline_tests {
         let merged = merge_overlay_fragments(
             &base_data, &base_index, &overlay_data, &overlay_index, &resolutions, budget(),
         ).unwrap();
+        let forged_resolution = [FdtOverlayResolution {
+            fragment_path: "/fragment@0".to_owned(),
+            target_node_path: "/".to_owned(),
+            target_phandle: 0,
+        }];
+        assert_eq!(
+            merge_overlay_fragments(
+                &base_data, &base_index, &overlay_data, &overlay_index,
+                &forged_resolution, budget(),
+            ),
+            Err(FdtError::MissingOverlayTarget),
+        );
+        assert_eq!(
+            merge_overlay_fragments(
+                &base_data, &base_index, &overlay_data, &overlay_index, &[], budget(),
+            ),
+            Err(FdtError::ResourceLimit),
+        );
+        let mut stale_index = base_index.clone();
+        stale_index.nodes[1].path = "/tampered".to_owned();
+        assert_eq!(
+            merge_overlay_fragments(
+                &base_data, &stale_index, &overlay_data, &overlay_index, &resolutions, budget(),
+            ),
+            Err(FdtError::InvalidStructure),
+        );
         let soc = merged.nodes.iter().find(|n| n.path == "/soc").unwrap();
         assert_eq!(soc.properties.iter().find(|p| p.name == "status").unwrap().value, b"okay\0");
         assert!(merged.nodes.iter().any(|n| n.path == "/soc/uart@1000"));
