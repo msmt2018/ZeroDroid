@@ -156,6 +156,47 @@ pub fn parse_android_boot_image_v3_v4(data:&[u8],budget:ParseBudget,max_payload_
  })
 }
 
+
+#[derive(Debug,Clone,PartialEq,Eq)]
+pub struct InitBootImageIndex{
+ pub header:AndroidBootHeaderV3V4,
+ pub header_page:Range<usize>,
+ pub ramdisk:Range<usize>,
+ pub boot_signature:Option<Range<usize>>,
+ pub total_indexed_bytes:u64,
+}
+/// Parses the standalone init_boot v4 image. Unlike boot.img, its kernel payload must be empty.
+pub fn parse_init_boot_image_v4(data:&[u8],budget:ParseBudget,max_payload_bytes:u64)->Result<InitBootImageIndex,ParseError>{
+ budget.check_input(u64::try_from(data.len()).map_err(|_|ParseError::IntegerOverflow)?)?;
+ if data.len()<BOOT_V4_HEADER_SIZE{return Err(ParseError::OutOfBounds)}
+ if data.get(..8)!=Some(ANDROID_BOOT_MAGIC.as_slice()){return Err(ParseError::InvalidMagic)}
+ let kernel_size=u32le(data,8)?;
+ let ramdisk_size=u32le(data,12)?;
+ let os_version=u32le(data,16)?;
+ let header_size=u32le(data,20)?;
+ if data.get(24..40).ok_or(ParseError::OutOfBounds)?.iter().any(|b|*b!=0){return Err(ParseError::InvalidBootHeader)}
+ let header_version=u32le(data,40)?;
+ if header_version!=4{return Err(ParseError::UnsupportedBootHeaderVersion)}
+ if kernel_size!=0||ramdisk_size==0||header_size as usize!=BOOT_V4_HEADER_SIZE{return Err(ParseError::InvalidBootHeader)}
+ let signature_size=u32le(data,1580)?;
+ let payload_total=u64::from(ramdisk_size).checked_add(u64::from(signature_size)).ok_or(ParseError::IntegerOverflow)?;
+ if payload_total>max_payload_bytes{return Err(ParseError::ResourceLimit)}
+ let ramdisk_start=BOOT_PAGE_SIZE;
+ let ramdisk_end=ramdisk_start.checked_add(u64::from(ramdisk_size)).ok_or(ParseError::IntegerOverflow)?;
+ let signature_start=checked_align_up(ramdisk_end,BOOT_PAGE_SIZE)?;
+ let signature_end=signature_start.checked_add(u64::from(signature_size)).ok_or(ParseError::IntegerOverflow)?;
+ let indexed_end=if signature_size==0{ramdisk_end}else{signature_end};
+ if indexed_end>u64::try_from(data.len()).map_err(|_|ParseError::IntegerOverflow)?{return Err(ParseError::OutOfBounds)}
+ let to_range=|start:u64,end:u64|->Result<Range<usize>,ParseError>{Ok(usize::try_from(start).map_err(|_|ParseError::IntegerOverflow)?..usize::try_from(end).map_err(|_|ParseError::IntegerOverflow)?)};
+ Ok(InitBootImageIndex{
+  header:AndroidBootHeaderV3V4{header_version,header_size,kernel_size,ramdisk_size,os_version,signature_size},
+  header_page:to_range(0,BOOT_PAGE_SIZE)?,
+  ramdisk:to_range(ramdisk_start,ramdisk_end)?,
+  boot_signature:if signature_size==0{None}else{Some(to_range(signature_start,signature_end)?)},
+  total_indexed_bytes:indexed_end,
+ })
+}
+
 #[cfg(test)]
 mod tests{
  use super::*;
@@ -200,5 +241,21 @@ mod tests{
   v[40..44].copy_from_slice(&3_u32.to_le_bytes());v[20..24].copy_from_slice(&1_u32.to_le_bytes());assert_eq!(parse_android_boot_image_v3_v4(&v,budget(),1),Err(ParseError::InvalidBootHeader));
   v[20..24].copy_from_slice(&1580_u32.to_le_bytes());v[8..12].copy_from_slice(&8192_u32.to_le_bytes());v[12..16].copy_from_slice(&1024_u32.to_le_bytes());assert_eq!(parse_android_boot_image_v3_v4(&v,budget(),1),Err(ParseError::ResourceLimit));assert_eq!(parse_android_boot_image_v3_v4(&v,budget(),u64::MAX),Err(ParseError::OutOfBounds));
  }
+ #[test]fn init_boot_v4_indexes_ramdisk_without_kernel(){
+  let mut v=vec![0_u8;8192];v[..8].copy_from_slice(b"ANDROID!");v[12..16].copy_from_slice(&4096_u32.to_le_bytes());v[20..24].copy_from_slice(&1584_u32.to_le_bytes());v[40..44].copy_from_slice(&4_u32.to_le_bytes());
+  let p=parse_init_boot_image_v4(&v,budget(),4096).unwrap();assert_eq!(p.header.kernel_size,0);assert_eq!(p.ramdisk,4096..8192);assert_eq!(p.boot_signature,None);
+ }
+ #[test]fn init_boot_rejects_kernel_wrong_version_and_truncation(){
+  let mut v=vec![0_u8;8192];v[..8].copy_from_slice(b"ANDROID!");v[12..16].copy_from_slice(&4096_u32.to_le_bytes());v[20..24].copy_from_slice(&1584_u32.to_le_bytes());v[40..44].copy_from_slice(&4_u32.to_le_bytes());
+  v[8..12].copy_from_slice(&1_u32.to_le_bytes());assert_eq!(parse_init_boot_image_v4(&v,budget(),4096),Err(ParseError::InvalidBootHeader));
+  v[8..12].fill(0);v[40..44].copy_from_slice(&3_u32.to_le_bytes());assert_eq!(parse_init_boot_image_v4(&v,budget(),4096),Err(ParseError::UnsupportedBootHeaderVersion));
+  v[40..44].copy_from_slice(&4_u32.to_le_bytes());assert_eq!(parse_init_boot_image_v4(&v[..4096],budget(),4096),Err(ParseError::OutOfBounds));
+ }
+ #[test]fn init_boot_enforces_ramdisk_budget_and_signature_range(){
+  let mut v=vec![0_u8;12288+256];v[..8].copy_from_slice(b"ANDROID!");v[12..16].copy_from_slice(&4096_u32.to_le_bytes());v[20..24].copy_from_slice(&1584_u32.to_le_bytes());v[40..44].copy_from_slice(&4_u32.to_le_bytes());v[1580..1584].copy_from_slice(&256_u32.to_le_bytes());
+  let p=parse_init_boot_image_v4(&v,budget(),4352).unwrap();assert_eq!(p.boot_signature,Some(8192..8448));
+  assert_eq!(parse_init_boot_image_v4(&v,budget(),4351),Err(ParseError::ResourceLimit));
+ }
+
  #[test]fn rejects_output_block_mismatch(){let mut v=header(2,1);v.extend_from_slice(&0xcac3_u16.to_le_bytes());v.extend_from_slice(&0_u16.to_le_bytes());v.extend_from_slice(&1_u32.to_le_bytes());v.extend_from_slice(&12_u32.to_le_bytes());assert_eq!(parse_android_sparse_image(&v,budget(),8192),Err(ParseError::OutputSizeMismatch));}
 }
