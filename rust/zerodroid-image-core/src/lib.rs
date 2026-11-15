@@ -22,11 +22,14 @@ pub fn checked_align_up(value:u64,alignment:u64)->Result<u64,ParseError>{
 }
 fn u16le(d:&[u8],o:usize)->Result<u16,ParseError>{let b=d.get(o..o.checked_add(2).ok_or(ParseError::IntegerOverflow)?).ok_or(ParseError::OutOfBounds)?;Ok(u16::from_le_bytes([b[0],b[1]]))}
 fn u32le(d:&[u8],o:usize)->Result<u32,ParseError>{let b=d.get(o..o.checked_add(4).ok_or(ParseError::IntegerOverflow)?).ok_or(ParseError::OutOfBounds)?;Ok(u32::from_le_bytes([b[0],b[1],b[2],b[3]]))}
+const fn make_crc32_table()->[u32;256]{
+ let mut table=[0_u32;256];let mut i=0;
+ while i<256{let mut value=i as u32;let mut bit=0;while bit<8{value=if value&1!=0{(value>>1)^0xedb8_8320}else{value>>1};bit+=1;}table[i]=value;i+=1;}
+ table
+}
+const CRC32_TABLE:[u32;256]=make_crc32_table();
 fn crc32_update(mut crc:u32, bytes:&[u8])->u32{
- for &byte in bytes{
-  crc^=u32::from(byte);
-  for _ in 0..8{crc=if crc&1!=0{(crc>>1)^0xedb8_8320}else{crc>>1};}
- }
+ for &byte in bytes{let index=((crc^u32::from(byte))&0xff) as usize;crc=(crc>>8)^CRC32_TABLE[index];}
  crc
 }
 fn crc32_repeat(mut crc:u32, pattern:&[u8], count:u64)->u32{
