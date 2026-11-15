@@ -323,8 +323,12 @@ pub fn build_vbmeta_chain_graph(
     let mut missing_targets = BTreeSet::new();
     let mut adjacency = vec![Vec::<usize>::new(); nodes.len()];
 
-    for (source_index, input) in inputs.iter().enumerate() {
+    for input in inputs {
         let source_normalized = normalize_slot(input.partition_name, slot);
+        if inputs.iter().take_while(|candidate| !core::ptr::eq(*candidate, input))
+            .any(|candidate| normalize_slot(candidate.partition_name, slot) == source_normalized) {
+            continue;
+        }
         let Some(&from_index) = names.get(&source_normalized) else { continue };
         if nodes[from_index].partition_name != input.partition_name { continue; }
 
@@ -361,7 +365,6 @@ pub fn build_vbmeta_chain_graph(
                 rollback_location_matches,
             });
         }
-        let _ = source_index;
     }
 
     // Iterative three-colour DFS avoids recursion on attacker-controlled graphs.
@@ -409,6 +412,79 @@ pub fn build_vbmeta_chain_graph(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn synthetic_vbmeta(partition: &str, target: Option<&str>, key: [u8; 4], location: u32) -> (Vec<u8>, VbMetaImageIndex) {
+        let mut data = vec![0_u8; 100];
+        let mut descriptors = Vec::new();
+        if let Some(target) = target {
+            let name = target.as_bytes();
+            data[0..8].copy_from_slice(&4_u64.to_be_bytes());
+            data[8..16].copy_from_slice(&84_u64.to_be_bytes());
+            data[16..20].copy_from_slice(&location.to_be_bytes());
+            data[20..24].copy_from_slice(&(name.len() as u32).to_be_bytes());
+            data[24..28].copy_from_slice(&4_u32.to_be_bytes());
+            data[92..92 + name.len()].copy_from_slice(name);
+            data[96..100].copy_from_slice(&key);
+            descriptors.push(crate::avb::AvbDescriptor {
+                tag: 4, body: 16..100, encoded: 0..100, vbmeta_minor: 2,
+            });
+        }
+        let header = crate::avb::VbMetaHeader {
+            required_major: 1, required_minor: 2,
+            authentication_block_size: 0, auxiliary_block_size: 0, algorithm_type: 0,
+            hash: 0..0, signature: 0..0, public_key: 0..0,
+            public_key_metadata: 0..0, descriptors: 0..100,
+            rollback_index: 9, flags: 0, rollback_index_location: location,
+            release_string: String::new(),
+        };
+        let index = VbMetaImageIndex {
+            header, authentication_block: 0..0, auxiliary_block: 0..100,
+            descriptors, verification: crate::avb::AvbVerificationState::NotPerformed,
+            total_indexed_bytes: 100,
+        };
+        let _ = partition;
+        (data, index)
+    }
+
+    #[test]
+    fn chain_graph_resolves_child_and_checks_key_and_location() {
+        let (root_data, root_index) = synthetic_vbmeta("vbmeta", Some("vbmeta_system"), [1,2,3,4], 3);
+        let (child_data, child_index) = synthetic_vbmeta("vbmeta_system", None, [1,2,3,4], 3);
+        let inputs = [
+            VbMetaInput { partition_name: "vbmeta", data: &root_data, index: &root_index },
+            VbMetaInput { partition_name: "vbmeta_system", data: &child_data, index: &child_index },
+        ];
+        let graph = build_vbmeta_chain_graph(&inputs, SlotSelection::None, 8, 8).unwrap();
+        assert_eq!(graph.nodes.len(), 2);
+        assert_eq!(graph.edges.len(), 1);
+        assert!(graph.edges[0].target_loaded);
+        assert_eq!(graph.edges[0].public_key_matches, Some(true));
+        assert_eq!(graph.edges[0].rollback_location_matches, Some(true));
+        assert!(graph.missing_targets.is_empty());
+        assert_eq!(graph.verification, crate::avb::AvbVerificationState::NotPerformed);
+    }
+
+    #[test]
+    fn chain_graph_reports_missing_child_and_cycle() {
+        let (root_data, root_index) = synthetic_vbmeta("vbmeta", Some("vbmeta"), [1,2,3,4], 2);
+        let inputs = [VbMetaInput { partition_name: "vbmeta", data: &root_data, index: &root_index }];
+        let graph = build_vbmeta_chain_graph(&inputs, SlotSelection::None, 4, 4).unwrap();
+        assert_eq!(graph.cyclic_edges, vec![("vbmeta".to_owned(), "vbmeta".to_owned())]);
+
+        let (other_data, other_index) = synthetic_vbmeta("vbmeta", Some("vbmeta_system"), [1,2,3,4], 2);
+        let missing = [VbMetaInput { partition_name: "vbmeta", data: &other_data, index: &other_index }];
+        let graph = build_vbmeta_chain_graph(&missing, SlotSelection::None, 4, 4).unwrap();
+        assert_eq!(graph.missing_targets, vec!["vbmeta_system".to_owned()]);
+        assert!(!graph.edges[0].target_loaded);
+    }
+
+    #[test]
+    fn chain_graph_enforces_node_and_edge_budgets() {
+        let (data, index) = synthetic_vbmeta("vbmeta", Some("child"), [1,2,3,4], 1);
+        let inputs = [VbMetaInput { partition_name: "vbmeta", data: &data, index: &index }];
+        assert_eq!(build_vbmeta_chain_graph(&inputs, SlotSelection::None, 0, 4), Err(ChainGraphError::ResourceLimit));
+        assert_eq!(build_vbmeta_chain_graph(&inputs, SlotSelection::None, 4, 0), Err(ChainGraphError::ResourceLimit));
+    }
 
     #[test]
     fn slot_suffix_is_only_applied_when_explicitly_selected() {
