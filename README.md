@@ -39,6 +39,6 @@ AGP 9.5.0 / Gradle 9.6.0, JDK 25, Android API 37, NDK r30 30.0.16248370, C++20 a
 
 ## Runtime status
 
-The current application and native code are foundation modules only. Native Core now exposes a `/dev/kvm` access/API-version probe, but this is discovery only: no production AVF/crosvm/KVM backend is wired. Ordinary APKs are not assumed to possess privileged virtualization permissions. No arbitrary OEM ROM compatibility, universal Cuttlefish Vendor, or default AVB/SELinux bypass is claimed.
+The current application and native code are foundation modules only. The Kotlin runtime API now includes a conservative host capability gate that requires separate AVF authorization/service evidence or the complete direct-KVM ARM64 prerequisite set before selecting a hardware backend. Native Core now exposes a `/dev/kvm` access/API-version probe, but this is discovery only: no production AVF/crosvm/KVM backend is wired. Ordinary APKs are not assumed to possess privileged virtualization permissions. No arbitrary OEM ROM compatibility, universal Cuttlefish Vendor, or default AVB/SELinux bypass is claimed.
 
 See [technical documentation index](docs/README.md).

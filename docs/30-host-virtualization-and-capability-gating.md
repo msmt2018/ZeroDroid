@@ -13,6 +13,16 @@ Native Core exposes a bounded `/dev/kvm` probe through the C ABI and JNI. It rep
 
 ## 3. Backend 选择
 
+Kotlin runtime API 中的 `HostCapabilityGate` 是保守决策器，输入必须是实际采集的证据，而不是设备型号推断。AVF 必须同时具备 API、服务、应用授权及目标 VM 类型支持；直接 KVM 必须同时具备 AArch64、KVM API v12、VM 创建授权、EL2、Stage-2 和 ARM GIC 证据。未知、拒绝、错误或不兼容均视为 blocker。决策器只在完整满足条件的硬件后端中按偏好选择；没有满足条件的后端时返回 unsupported，不存在 CPU 模拟或容器回退。当前 JNI 探测只提供 KVM device/API 证据，其余字段必须由后续 Android/Hypervisor adapter 以真实系统证据填充，不能伪造为 AVAILABLE。
+
+### 3.1 能力证据与决策边界
+
+- `CapabilityFact.UNKNOWN` 不等于不可用，也绝不等于可用；必须继续探测或报告未知。
+- `/dev/kvm` 可打开且 API 版本正确，只能填充 KVM device/API 证据。
+- 应用是否被允许创建 VM、EL2 是否由可用 Hypervisor 管理、Stage-2 与 GIC 能力，必须由受支持的系统接口或授权后端证明。
+- AVF service/API/授权状态不能通过检查包名或 Android 版本推断。
+
+
 AVF：检测设备实际提供的 API、VirtualizationService、权限和支持的 VM 类型。AVF API/权限受 Android 版本、系统镜像、设备实现、应用预装/特权授权和具体 API 约束，不能简单规定 Android 13+ 所有手机可用。
 
 直接 KVM/VMM：需要 Host Kernel 暴露 KVM 接口、权限、EL2/虚拟化控制权和兼容的 VMM/设备后端。/dev/kvm 是否存在只是检查项，不代表 App 可访问或创建所需 VM。crosvm 仅是 VMM 候选，不是 Hypervisor；可在 Android ARM64 KVM 上运行也必须通过系统权限和设备闭环验证。
