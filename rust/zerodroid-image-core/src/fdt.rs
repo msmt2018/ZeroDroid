@@ -1031,7 +1031,7 @@ mod fixup_tests {
     #[test]
     fn rejects_misaligned_or_out_of_range_local_fixup_offsets() {
         let (base_data, base) = base_fixture();
-        let (mut overlay_data, mut overlay) = overlay_fixture();
+        let (overlay_data, mut overlay) = overlay_fixture();
         overlay_data[overlay.nodes[8].properties[0].value.clone()]
             .copy_from_slice(&1_u32.to_be_bytes());
         assert_eq!(
@@ -1922,7 +1922,7 @@ mod overlay_merge_pipeline_tests {
         let base_tree = FdtMergedTree {
             reservations: vec![], boot_cpuid_phys: 0,
             nodes: vec![
-                node("", "/", None, vec![prop("compatible", b"vendor,base\\0")]),
+                node("", "/", None, vec![prop("compatible", b"vendor,base\0")]),
                 node("soc", "/soc", Some(0), vec![]),
             ],
             root_compatible: vec!["vendor,base".to_owned()], model: None,
@@ -1931,11 +1931,11 @@ mod overlay_merge_pipeline_tests {
             reservations: vec![], boot_cpuid_phys: 0,
             nodes: vec![
                 node("", "/", None, vec![]),
-                node("fragment@0", "/fragment@0", Some(0), vec![prop("target-path", b"/soc\\0")]),
+                node("fragment@0", "/fragment@0", Some(0), vec![prop("target-path", b"/soc\0")]),
                 node("__overlay__", "/fragment@0/__overlay__", Some(1), vec![]),
                 node("uart@1000", "/fragment@0/__overlay__/uart@1000", Some(2), vec![]),
                 node("__symbols__", "/__symbols__", Some(0), vec![
-                    prop("serial0", b"/fragment@0/__overlay__/uart@1000\\0"),
+                    prop("serial0", b"/fragment@0/__overlay__/uart@1000\0"),
                 ]),
             ],
             root_compatible: vec![], model: None,
@@ -1954,7 +1954,7 @@ mod overlay_merge_pipeline_tests {
         ).unwrap();
         let symbols = merged.nodes.iter().find(|node| node.path == "/__symbols__").unwrap();
         assert_eq!(symbols.properties.iter().find(|p| p.name == "serial0").unwrap().value,
-            b"/soc/uart@1000\\0");
+            b"/soc/uart@1000\0");
         let output = serialize_fdt_v17(&merged, budget()).unwrap();
         let parsed = parse_fdt(&output, budget()).unwrap();
         assert!(parsed.nodes.iter().any(|node| node.path == "/__symbols__"));
