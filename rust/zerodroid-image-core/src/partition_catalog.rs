@@ -417,7 +417,7 @@ mod tests {
     use super::*;
 
     fn synthetic_vbmeta(target: Option<&str>, key: [u8; 4], location: u32) -> (Vec<u8>, VbMetaImageIndex) {
-        let (descriptors, descriptor_range, public_key_offset) = if let Some(target) = target {
+        let (data, descriptors, public_key_offset) = if let Some(target) = target {
             let name = target.as_bytes();
             let variable_len = name.len() + 4;
             let padded_len = (variable_len + 7) & !7;
