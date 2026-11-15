@@ -1,6 +1,6 @@
 # DTBO Overlay Merge：有界拥有树
 
-本阶段在已经完成 FDT 结构解析、fragment target 路由和 external/local fixup 写回之后执行节点合并。
+本阶段提供独立节点合并 API，并由 `apply_dtbo_sequence` 将 FDT 解析、external/local fixup、fragment target 路由、节点与 symbols 合并、reservation map 合并和输出序列化组合为原始 DTBO 有序事务。
 
 ## 接口
 
