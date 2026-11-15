@@ -1781,3 +1781,73 @@ mod fdt_serializer_tests {
         assert_eq!(serialize_fdt_v17(&invalid, budget()), Err(FdtError::InvalidStructure));
     }
 }
+
+
+#[cfg(test)]
+mod overlay_merge_pipeline_tests {
+    use super::*;
+
+    fn budget() -> ParseBudget {
+        ParseBudget { max_input_bytes: 32 * 1024, max_items: 256, max_nesting_depth: 16 }
+    }
+
+    fn prop(name: &str, value: &[u8]) -> FdtOwnedProperty {
+        FdtOwnedProperty { name: name.to_owned(), value: value.to_vec() }
+    }
+
+    fn node(name: &str, path: &str, parent: Option<usize>, properties: Vec<FdtOwnedProperty>) -> FdtOwnedNode {
+        FdtOwnedNode { name: name.to_owned(), path: path.to_owned(), parent, properties }
+    }
+
+    #[test]
+    fn merges_fragment_then_serializes_and_reparses_result() {
+        let base_tree = FdtMergedTree {
+            reservations: vec![],
+            boot_cpuid_phys: 0,
+            nodes: vec![
+                node("", "/", None, vec![prop("compatible", b"vendor,base\0")]),
+                node("soc", "/soc", Some(0), vec![prop("status", b"disabled\0")]),
+            ],
+            root_compatible: vec!["vendor,base".to_owned()],
+            model: None,
+        };
+        let overlay_tree = FdtMergedTree {
+            reservations: vec![],
+            boot_cpuid_phys: 0,
+            nodes: vec![
+                node("", "/", None, vec![]),
+                node("fragment@0", "/fragment@0", Some(0), vec![
+                    prop("target-path", b"/soc\0"),
+                ]),
+                node("__overlay__", "/fragment@0/__overlay__", Some(1), vec![
+                    prop("status", b"okay\0"),
+                ]),
+                node("uart@1000", "/fragment@0/__overlay__/uart@1000", Some(2), vec![
+                    prop("compatible", b"ns16550a\0"),
+                ]),
+            ],
+            root_compatible: vec![],
+            model: None,
+        };
+        let base_data = serialize_fdt_v17(&base_tree, budget()).unwrap();
+        let overlay_data = serialize_fdt_v17(&overlay_tree, budget()).unwrap();
+        let base_index = parse_fdt(&base_data, budget()).unwrap();
+        let overlay_index = parse_fdt(&overlay_data, budget()).unwrap();
+        let resolutions = vec![FdtOverlayResolution {
+            fragment_path: "/fragment@0".to_owned(),
+            target_node_path: "/soc".to_owned(),
+            target_phandle: 0,
+        }];
+
+        let merged = merge_overlay_fragments(
+            &base_data, &base_index, &overlay_data, &overlay_index, &resolutions, budget(),
+        ).unwrap();
+        let soc = merged.nodes.iter().find(|n| n.path == "/soc").unwrap();
+        assert_eq!(soc.properties.iter().find(|p| p.name == "status").unwrap().value, b"okay\0");
+        assert!(merged.nodes.iter().any(|n| n.path == "/soc/uart@1000"));
+
+        let output = serialize_fdt_v17(&merged, budget()).unwrap();
+        let reparsed = parse_fdt(&output, budget()).unwrap();
+        assert!(reparsed.nodes.iter().any(|n| n.path == "/soc/uart@1000"));
+    }
+}
