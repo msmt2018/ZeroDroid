@@ -1417,13 +1417,124 @@ pub fn merge_overlay_fragments(
             Ok(value.to_owned())
         }).transpose()?;
 
-    Ok(FdtMergedTree {
+    let mut merged = FdtMergedTree {
         reservations: base.reservations.clone(),
         boot_cpuid_phys: base.header.boot_cpuid_phys,
         nodes,
         root_compatible: compatible,
         model,
-    })
+    };
+    merge_overlay_symbols(
+        base, overlay_data, overlay, resolutions, &mut merged, budget,
+    )?;
+    Ok(merged)
+}
+
+/// Merges exported overlay symbols into the base tree's /__symbols__ node.
+/// Overlay paths rooted below fragment@N/__overlay__ are rewritten to the
+/// corresponding destination path. Ambiguous or conflicting exports fail closed.
+fn merge_overlay_symbols(
+    base: &FdtIndex,
+    overlay_data: &[u8],
+    overlay: &FdtIndex,
+    resolutions: &[FdtOverlayResolution],
+    merged: &mut FdtMergedTree,
+    budget: ParseBudget,
+) -> Result<(), FdtError> {
+    let base_symbols_index = base.nodes.iter().position(|node| node.path == "/__symbols__");
+    let overlay_symbols_index = overlay.nodes.iter().position(|node| node.path == "/__symbols__");
+    let Some(overlay_symbols_index) = overlay_symbols_index else {
+        return Ok(());
+    };
+
+    // Validate existing exports before using them as the destination namespace.
+    if let Some(index) = base_symbols_index {
+        for property in &merged.nodes[index].properties {
+            let path = c_string(&property.value)?;
+            if path.len() + 1 != property.value.len() || !path.starts_with('/')
+                || !merged.nodes.iter().any(|node| node.path == path)
+            {
+                return Err(FdtError::InvalidSymbol);
+            }
+        }
+    }
+
+    let mut destination_index = if let Some(index) = base_symbols_index {
+        index
+    } else {
+        let index = merged.nodes.len();
+        if index.checked_add(1).ok_or(FdtError::IntegerOverflow)? > budget.max_items as usize {
+            return Err(FdtError::ResourceLimit);
+        }
+        merged.nodes.push(FdtOwnedNode {
+            name: "__symbols__".to_owned(),
+            path: "/__symbols__".to_owned(),
+            parent: Some(0),
+            properties: Vec::new(),
+        });
+        index
+    };
+
+    let source = &overlay.nodes[overlay_symbols_index];
+    for symbol in &source.properties {
+        if symbol.name.is_empty() || symbol.name.contains('/') || symbol.name.as_bytes().contains(&0) {
+            return Err(FdtError::InvalidSymbol);
+        }
+        let bytes = overlay_data.get(symbol.value.clone()).ok_or(FdtError::InvalidRange)?;
+        let source_path = c_string(bytes)?;
+        if source_path.len() + 1 != bytes.len() || !source_path.starts_with('/') {
+            return Err(FdtError::InvalidSymbol);
+        }
+
+        let mut mapped_path: Option<String> = None;
+        for resolution in resolutions {
+            let overlay_root = format!("{}/__overlay__", resolution.fragment_path);
+            if source_path == overlay_root {
+                if mapped_path.replace(resolution.target_node_path.clone()).is_some() {
+                    return Err(FdtError::InvalidSymbol);
+                }
+            } else if let Some(suffix) = source_path.strip_prefix(&format!("{overlay_root}/")) {
+                let candidate = if resolution.target_node_path == "/" {
+                    format!("/{suffix}")
+                } else {
+                    format!("{}/{suffix}", resolution.target_node_path)
+                };
+                if mapped_path.replace(candidate).is_some() {
+                    return Err(FdtError::InvalidSymbol);
+                }
+            }
+        }
+        let mapped_path = mapped_path.ok_or(FdtError::InvalidSymbol)?;
+        if !merged.nodes.iter().any(|node| node.path == mapped_path) {
+            return Err(FdtError::InvalidSymbol);
+        }
+        let mut value = mapped_path.into_bytes();
+        value.push(0);
+
+        if let Some(existing) = merged.nodes[destination_index].properties.iter()
+            .find(|property| property.name == symbol.name)
+        {
+            if existing.value != value {
+                return Err(FdtError::InvalidSymbol);
+            }
+            continue;
+        }
+        let property_count = merged.nodes.iter().try_fold(0usize, |count, node| {
+            count.checked_add(node.properties.len()).ok_or(FdtError::IntegerOverflow)
+        })?;
+        if merged.nodes.len().checked_add(property_count).and_then(|v| v.checked_add(1))
+            .ok_or(FdtError::IntegerOverflow)? > budget.max_items as usize
+        {
+            return Err(FdtError::ResourceLimit);
+        }
+        merged.nodes[destination_index].properties.push(FdtOwnedProperty {
+            name: symbol.name.clone(),
+            value,
+        });
+        destination_index = merged.nodes.iter().position(|node| node.path == "/__symbols__")
+            .ok_or(FdtError::InvalidSymbol)?;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1802,6 +1913,49 @@ mod overlay_merge_pipeline_tests {
 
     fn node(name: &str, path: &str, parent: Option<usize>, properties: Vec<FdtOwnedProperty>) -> FdtOwnedNode {
         FdtOwnedNode { name: name.to_owned(), path: path.to_owned(), parent, properties }
+    }
+
+    #[test]
+    fn overlay_symbols_are_rewritten_and_conflicts_rejected() {
+        let base_tree = FdtMergedTree {
+            reservations: vec![], boot_cpuid_phys: 0,
+            nodes: vec![
+                node("", "/", None, vec![prop("compatible", b"vendor,base\\0")]),
+                node("soc", "/soc", Some(0), vec![]),
+            ],
+            root_compatible: vec!["vendor,base".to_owned()], model: None,
+        };
+        let overlay_tree = FdtMergedTree {
+            reservations: vec![], boot_cpuid_phys: 0,
+            nodes: vec![
+                node("", "/", None, vec![]),
+                node("fragment@0", "/fragment@0", Some(0), vec![prop("target-path", b"/soc\\0")]),
+                node("__overlay__", "/fragment@0/__overlay__", Some(1), vec![]),
+                node("uart@1000", "/fragment@0/__overlay__/uart@1000", Some(2), vec![]),
+                node("__symbols__", "/__symbols__", Some(0), vec![
+                    prop("serial0", b"/fragment@0/__overlay__/uart@1000\\0"),
+                ]),
+            ],
+            root_compatible: vec![], model: None,
+        };
+        let base_data = serialize_fdt_v17(&base_tree, budget()).unwrap();
+        let overlay_data = serialize_fdt_v17(&overlay_tree, budget()).unwrap();
+        let base_index = parse_fdt(&base_data, budget()).unwrap();
+        let overlay_index = parse_fdt(&overlay_data, budget()).unwrap();
+        let resolutions = vec![FdtOverlayResolution {
+            fragment_path: "/fragment@0".to_owned(),
+            target_node_path: "/soc".to_owned(),
+            target_phandle: 0,
+        }];
+        let merged = merge_overlay_fragments(
+            &base_data, &base_index, &overlay_data, &overlay_index, &resolutions, budget(),
+        ).unwrap();
+        let symbols = merged.nodes.iter().find(|node| node.path == "/__symbols__").unwrap();
+        assert_eq!(symbols.properties.iter().find(|p| p.name == "serial0").unwrap().value,
+            b"/soc/uart@1000\\0");
+        let output = serialize_fdt_v17(&merged, budget()).unwrap();
+        let parsed = parse_fdt(&output, budget()).unwrap();
+        assert!(parsed.nodes.iter().any(|node| node.path == "/__symbols__"));
     }
 
     #[test]
