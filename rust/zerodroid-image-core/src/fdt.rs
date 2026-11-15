@@ -151,7 +151,7 @@ pub fn parse_fdt(data: &[u8], budget: ParseBudget) -> Result<FdtIndex, FdtError>
         strings_size: be32(data, 32)?,
         structure_size: be32(data, 36)?,
     };
-    if !(16..=17).contains(&header.version)
+    if header.version != 17
         || header.last_compatible_version > 17
         || header.last_compatible_version > header.version
     {
@@ -326,10 +326,9 @@ mod tests {
         token(&mut structure, FDT_BEGIN_NODE);
         structure.extend_from_slice(&[0, 0, 0, 0]);
         token(&mut structure, FDT_PROP);
-        structure.extend_from_slice(&16_u32.to_be_bytes());
+        structure.extend_from_slice(&24_u32.to_be_bytes());
         structure.extend_from_slice(&compatible_off.to_be_bytes());
         structure.extend_from_slice(b"vendor,board\0vendor,soc\0");
-        structure.extend_from_slice(&[0, 0]);
         token(&mut structure, FDT_PROP);
         structure.extend_from_slice(&12_u32.to_be_bytes());
         structure.extend_from_slice(&model_off.to_be_bytes());
