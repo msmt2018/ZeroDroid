@@ -93,9 +93,8 @@ impl From<AvbParseError> for CatalogError {
 fn normalize_slot(name: &str, slot: SlotSelection) -> String {
     let Some(suffix) = slot.suffix() else { return name.to_owned() };
     let selected = format!("_{suffix}");
-    let other = if suffix == 'a' { "_b" } else { "_a" };
     if name.ends_with(&selected) { name.to_owned() }
-    else if name.ends_with(other) { name[..name.len() - 2].to_owned() + &selected }
+    else if name.ends_with("_a") || name.ends_with("_b") { name.to_owned() }
     else { format!("{name}{selected}") }
 }
 
