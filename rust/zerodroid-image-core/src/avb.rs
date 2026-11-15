@@ -27,7 +27,7 @@ pub enum AvbVerificationState {
     NotPerformed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AvbDescriptor {
     pub tag: u64,
     pub body: Range<usize>,
@@ -60,12 +60,6 @@ pub struct VbMetaImageIndex {
     pub descriptors: Vec<AvbDescriptor>,
     pub verification: AvbVerificationState,
     pub total_indexed_bytes: u64,
-}
-
-fn u32le(data: &[u8], offset: usize) -> Result<u32, AvbParseError> {
-    let end = offset.checked_add(4).ok_or(AvbParseError::IntegerOverflow)?;
-    let bytes = data.get(offset..end).ok_or(AvbParseError::OutOfBounds)?;
-    Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
 
 fn u64be(data: &[u8], offset: usize) -> Result<u64, AvbParseError> {
