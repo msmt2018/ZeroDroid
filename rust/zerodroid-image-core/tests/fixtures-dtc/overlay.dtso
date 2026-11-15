@@ -1,0 +1,18 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+    fragment@0 {
+        target = <&serial0>;
+
+        __overlay__ {
+            status = "okay";
+
+            child0: child@0 {
+                compatible = "zerodroid,dtc-fixture-child";
+                remote = <&serial0>;
+                self = <&child0>;
+            };
+        };
+    };
+};
