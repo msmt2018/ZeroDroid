@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod avb;
+
 pub mod vendor_boot;
 pub mod gpt;
 pub mod lp_metadata;
