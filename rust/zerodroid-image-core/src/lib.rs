@@ -44,6 +44,9 @@ pub fn parse_android_sparse_image(data:&[u8],budget:ParseBudget,max_expanded_byt
  if expanded>max_expanded_bytes{return Err(ParseError::ResourceLimit)}
  let mut cursor=usize::from(h.file_header_size);
  if cursor>data.len(){return Err(ParseError::OutOfBounds)}
+ let minimum_chunk_bytes=u64::from(h.total_chunks).checked_mul(u64::from(h.chunk_header_size)).ok_or(ParseError::IntegerOverflow)?;
+ let remaining=u64::try_from(data.len()-cursor).map_err(|_|ParseError::IntegerOverflow)?;
+ if minimum_chunk_bytes>remaining{return Err(ParseError::OutOfBounds)}
  let mut output_blocks=0_u64;
  let mut chunks=Vec::with_capacity(h.total_chunks as usize);
  for _ in 0..h.total_chunks{
