@@ -314,6 +314,7 @@ mod tests {
         disk[entry + 16] = 0x12;
         put_u64(&mut disk, entry + 32, 45);
         put_u64(&mut disk, entry + 40, 55);
+        put_u32(&mut disk, 512 + 80, 2);
         let crc = crc32(&disk[2 * 512..2 * 512 + 256]);
         put_u32(&mut disk, 512 + 88, crc);
         let checksum = crc32_header_with_zeroed_checksum(&disk[512..512 + GPT_MIN_HEADER_SIZE]);
