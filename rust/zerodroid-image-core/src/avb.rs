@@ -525,10 +525,10 @@ mod tests {
         data.resize(256 + 64 + 256, 0);
         data[20..28].copy_from_slice(&256u64.to_be_bytes());
         data[96..104].copy_from_slice(&48u64.to_be_bytes());
-        data[104..112].copy_from_slice(&144u64.to_be_bytes());
+        data[104..112].copy_from_slice(&148u64.to_be_bytes());
         let start = 368usize;
         data[start..start + 8].copy_from_slice(&2u64.to_be_bytes());
-        data[start + 8..start + 16].copy_from_slice(&128u64.to_be_bytes());
+        data[start + 8..start + 16].copy_from_slice(&132u64.to_be_bytes());
         let body = start + 16;
         data[body..body + 8].copy_from_slice(&4096u64.to_be_bytes());
         data[body + 8..body + 14].copy_from_slice(b"sha256");
