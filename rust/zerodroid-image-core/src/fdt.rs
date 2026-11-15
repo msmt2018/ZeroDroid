@@ -2457,7 +2457,26 @@ mod overlay_merge_pipeline_tests {
             .expect("CI must generate base.dtb with dtc -@");
         let overlay = std::fs::read(fixture_dir.join("overlay.dtbo"))
             .expect("CI must generate overlay.dtbo with dtc -@");
-        let output = apply_dtbo_sequence(&base, &[&overlay], budget()).unwrap();
+        let base_index = parse_fdt(&base, budget()).expect("parse dtc base");
+        let raw_index = parse_fdt(&overlay, budget()).expect("parse dtc overlay");
+        let plan = plan_overlay_fixups(&base, &base_index, &overlay, &raw_index, budget())
+            .expect("plan dtc fixups");
+        let write_set = build_overlay_fixup_write_set(&overlay, &plan, budget())
+            .expect("build dtc write set");
+        let fixed = apply_overlay_fixup_write_set(&overlay, &write_set, budget())
+            .expect("apply dtc write set");
+        let fixed_index = parse_fdt(&fixed, budget()).expect("parse fixed dtc overlay");
+        let overlay_index = index_overlay(&fixed, &fixed_index, budget().max_items as usize)
+            .expect("index dtc fragments");
+        let resolutions = resolve_overlay_targets(&base, &base_index, &overlay_index)
+            .expect("resolve dtc fragment target");
+        let merged = merge_overlay_fragments(
+            &base, &base_index, &fixed, &fixed_index, &resolutions, budget(),
+        ).expect("merge dtc overlay");
+        let expected = serialize_fdt_v17(&merged, budget()).expect("serialize dtc merge");
+        let output = apply_dtbo_sequence(&base, &[&overlay], budget())
+            .expect("run dtc pipeline");
+        assert_eq!(output, expected);
         let parsed = parse_fdt(&output, budget()).unwrap();
         let serial = parsed.nodes.iter()
             .find(|node| node.path == "/soc/serial@1000").unwrap();
