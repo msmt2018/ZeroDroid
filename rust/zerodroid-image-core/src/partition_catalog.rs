@@ -230,6 +230,182 @@ pub fn build_partition_catalog(
     })
 }
 
+
+/// A caller-supplied VBMeta image. The byte slice and parsed index must refer to
+/// the same immutable image; the catalog checks all descriptor ranges again.
+#[derive(Debug, Clone, Copy)]
+pub struct VbMetaInput<'a> {
+    pub partition_name: &'a str,
+    pub data: &'a [u8],
+    pub index: &'a VbMetaImageIndex,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VbMetaChainNode {
+    pub partition_name: String,
+    pub normalized_name: String,
+    pub rollback_index: u64,
+    pub rollback_index_location: u32,
+    pub descriptor_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VbMetaChainEdge {
+    pub from_partition: String,
+    pub to_partition: String,
+    pub normalized_target: String,
+    pub target_loaded: bool,
+    pub rollback_index_location: u32,
+    /// None means the child image was not supplied.
+    pub public_key_matches: Option<bool>,
+    /// None means the child image was not supplied.
+    pub rollback_location_matches: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VbMetaChainGraph {
+    pub slot: SlotSelection,
+    pub nodes: Vec<VbMetaChainNode>,
+    pub edges: Vec<VbMetaChainEdge>,
+    pub missing_targets: Vec<String>,
+    pub duplicate_nodes: Vec<String>,
+    pub cyclic_edges: Vec<(String, String)>,
+    /// Structural parsing only; this graph is never a signature/trust result.
+    pub verification: crate::avb::AvbVerificationState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChainGraphError {
+    EmptyPartitionName,
+    DuplicateInputLimit,
+    ResourceLimit,
+    Avb(AvbParseError),
+}
+
+impl From<AvbParseError> for ChainGraphError {
+    fn from(value: AvbParseError) -> Self { Self::Avb(value) }
+}
+
+/// Builds a bounded multi-VBMeta dependency graph from already parsed VBMeta images.
+/// Chain descriptor public keys are compared byte-for-byte with a supplied child's
+/// embedded public-key field, but no key trust or signature verification is implied.
+pub fn build_vbmeta_chain_graph(
+    inputs: &[VbMetaInput<'_>],
+    slot: SlotSelection,
+    max_nodes: usize,
+    max_edges: usize,
+) -> Result<VbMetaChainGraph, ChainGraphError> {
+    if inputs.len() > max_nodes { return Err(ChainGraphError::ResourceLimit); }
+    let mut nodes = Vec::with_capacity(inputs.len());
+    let mut names = BTreeMap::<String, usize>::new();
+    let mut duplicate_nodes = BTreeSet::new();
+
+    for input in inputs {
+        if input.partition_name.is_empty() { return Err(ChainGraphError::EmptyPartitionName); }
+        let normalized = normalize_slot(input.partition_name, slot);
+        if names.contains_key(&normalized) {
+            duplicate_nodes.insert(normalized);
+            continue;
+        }
+        let node_index = nodes.len();
+        names.insert(normalized.clone(), node_index);
+        nodes.push(VbMetaChainNode {
+            partition_name: input.partition_name.to_owned(),
+            normalized_name: normalized,
+            rollback_index: input.index.header.rollback_index,
+            rollback_index_location: input.index.header.rollback_index_location,
+            descriptor_count: input.index.descriptors.len(),
+        });
+    }
+
+    // Keep the first occurrence for a duplicate name, but report the ambiguity.
+    let mut edges = Vec::new();
+    let mut missing_targets = BTreeSet::new();
+    let mut adjacency = vec![Vec::<usize>::new(); nodes.len()];
+
+    for (source_index, input) in inputs.iter().enumerate() {
+        let source_normalized = normalize_slot(input.partition_name, slot);
+        let Some(&from_index) = names.get(&source_normalized) else { continue };
+        if nodes[from_index].partition_name != input.partition_name { continue; }
+
+        for descriptor in &input.index.descriptors {
+            if descriptor.tag != 4 { continue; }
+            let chain = parse_chain_partition_descriptor(input.data, descriptor)?;
+            if edges.len() >= max_edges { return Err(ChainGraphError::ResourceLimit); }
+            let target_normalized = normalize_slot(&chain.partition_name, slot);
+            let target_index = names.get(&target_normalized).copied();
+            let child = target_index.and_then(|idx| {
+                inputs.iter().find(|candidate| {
+                    normalize_slot(candidate.partition_name, slot) == target_normalized
+                })
+            });
+            let public_key_matches = child.map(|candidate| {
+                candidate.data.get(candidate.index.header.public_key.clone())
+                    == input.data.get(chain.public_key.clone())
+            });
+            let rollback_location_matches = child.map(|candidate| {
+                candidate.index.header.rollback_index_location == chain.rollback_index_location
+            });
+            if let Some(target) = target_index {
+                adjacency[from_index].push(target);
+            } else {
+                missing_targets.insert(target_normalized.clone());
+            }
+            edges.push(VbMetaChainEdge {
+                from_partition: nodes[from_index].partition_name.clone(),
+                to_partition: chain.partition_name,
+                normalized_target: target_normalized,
+                target_loaded: target_index.is_some(),
+                rollback_index_location: chain.rollback_index_location,
+                public_key_matches,
+                rollback_location_matches,
+            });
+        }
+        let _ = source_index;
+    }
+
+    // Iterative three-colour DFS avoids recursion on attacker-controlled graphs.
+    let mut color = vec![0_u8; nodes.len()];
+    let mut cyclic_edges = BTreeSet::<(String, String)>::new();
+    for root in 0..nodes.len() {
+        if color[root] != 0 { continue; }
+        color[root] = 1;
+        let mut stack = vec![(root, 0_usize)];
+        while let Some((node, next_edge)) = stack.last_mut() {
+            if *next_edge >= adjacency[*node].len() {
+                color[*node] = 2;
+                stack.pop();
+                continue;
+            }
+            let target = adjacency[*node][*next_edge];
+            *next_edge += 1;
+            match color[target] {
+                0 => {
+                    color[target] = 1;
+                    stack.push((target, 0));
+                }
+                1 => {
+                    cyclic_edges.insert((
+                        nodes[*node].partition_name.clone(),
+                        nodes[target].partition_name.clone(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Ok(VbMetaChainGraph {
+        slot,
+        nodes,
+        edges,
+        missing_targets: missing_targets.into_iter().collect(),
+        duplicate_nodes: duplicate_nodes.into_iter().collect(),
+        cyclic_edges: cyclic_edges.into_iter().collect(),
+        verification: crate::avb::AvbVerificationState::NotPerformed,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
