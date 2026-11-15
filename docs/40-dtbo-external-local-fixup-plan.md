@@ -30,9 +30,21 @@
 - 目前没有执行 fixup 写回、overlay merge、symbol export 合并或最终 FDT 再解析。
 - 计划生成成功不代表 DTBO 已应用，也不代表 Guest 设备树可启动。
 
-## 5. 尚未完成
 
-- 将 external/local plan 合成为有冲突检测的统一写入集。
-- 实现独立 bounded output buffer 上的原子写回与 phandle/symbol merge。
+## 6. 统一写入集与原子写回
+
+实现增加 `FdtOverlayWriteSet`：
+
+- External 与 Local fixup 被转换成绝对字节范围、目标 32 位值和写入类型。
+- 写入集按绝对偏移排序；重复或重叠的 4 字节写入目标拒绝整个计划。
+- 生成写入集时重新验证 property range、offset、输出长度及条目预算。
+- `apply_overlay_fixup_write_set` 在分配输出前验证全部写入，再复制受预算限制的 DTBO 字节并执行写入。
+- 原始 DTBO 不会被修改；任何验证错误都不会产生部分输出。
+- 该写回只完成 DTBO fixup 字段填充，不等于把 overlay 子树合并进基础 DTB。
+
+## 7. 尚未完成
+
+- 将 fixup 写入后的 overlay 子树合并到基础树，并处理节点/property 覆盖语义。
+- 完成 symbol export 合并与多 DTBO 顺序应用。
 - 支持多个 DTBO 的有序应用、跨 overlay phandle 冲突与目标路径冲突检测。
 - 对合并结果重新解析并执行 Guest Platform Profile 验证。
