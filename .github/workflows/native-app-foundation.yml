@@ -169,5 +169,7 @@ jobs:
         run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "ndk;30.0.16248370" "cmake;3.31.6"
       - name: Generate wrapper for CI
         run: gradle wrapper --gradle-version 9.6.0
+      - name: Run host capability gate unit tests
+        run: ./gradlew --no-daemon :core:runtime-api:testDebugUnitTest
       - name: Assemble debug APK
         run: ./gradlew --no-daemon :app:assembleDebug
