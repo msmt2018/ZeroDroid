@@ -1482,7 +1482,9 @@ fn merge_overlay_symbols(
         }
         let bytes = overlay_data.get(symbol.value.clone()).ok_or(FdtError::InvalidRange)?;
         let source_path = c_string(bytes)?;
-        if source_path.len() + 1 != bytes.len() || !source_path.starts_with('/') {
+        if source_path.len() + 1 != bytes.len() || !source_path.starts_with('/')
+            || !overlay.nodes.iter().any(|node| node.path == source_path)
+        {
             return Err(FdtError::InvalidSymbol);
         }
 
