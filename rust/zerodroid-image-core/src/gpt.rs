@@ -217,6 +217,12 @@ pub fn parse_primary_gpt(
         return Err(ParseError::InvalidBootHeader);
     }
 
+    let mut unique_guids: Vec<[u8; 16]> = partitions.iter().map(|p| p.unique_guid).collect();
+    unique_guids.sort_unstable();
+    if unique_guids.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(ParseError::InvalidBootHeader);
+    }
+
     Ok(GptImageIndex {
         header: GptHeader {
             revision,
@@ -327,8 +333,10 @@ mod tests {
     fn rejects_duplicate_unique_partition_guids() {
         let mut disk = valid_disk();
         let second = 2 * 512 + 128;
+        let type_guid = disk[2 * 512..2 * 512 + 16].to_vec();
         let duplicate_guid = disk[2 * 512 + 16..2 * 512 + 32].to_vec();
-        disk[second..second + 16].copy_from_slice(&duplicate_guid);
+        disk[second..second + 16].copy_from_slice(&type_guid);
+        disk[second + 16..second + 32].copy_from_slice(&duplicate_guid);
         disk[second + 32..second + 40].copy_from_slice(&60_u64.to_le_bytes());
         disk[second + 40..second + 48].copy_from_slice(&69_u64.to_le_bytes());
         put_u32(&mut disk, 512 + 80, 2);
