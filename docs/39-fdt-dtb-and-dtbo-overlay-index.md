@@ -25,9 +25,9 @@
 
 `index_overlay` 提取根级 `fragment@*` 的 `target` 或 `target-path`、`__overlay__` 子树是否存在，以及 `__fixups__`/`__local_fixups__` 是否存在。
 
-这不是 Overlay 应用器。当前已增加只读 target 解析：对 base DTB 建立排序后的 phandle 索引，拒绝无效/重复 phandle，并将 fragment 的 target-path 或 target phandle 精确映射到 base 节点；fragment 缺少 `__overlay__` 子树时拒绝生成解析结果。该阶段不修改任一 DTB。
+Overlay 执行流水线现已具备。底层仍保留只读 target 解析接口：对 base DTB 建立排序后的 phandle 索引，拒绝无效/重复 phandle，并将 fragment 的 target-path 或 target phandle 精确映射到 base 节点；fragment 缺少 `__overlay__` 子树时拒绝生成解析结果。该阶段不修改任一 DTB。
 
-尚未完成 phandle 重定位、符号解析、external/local fixup 写回、overlay merge、多 overlay 顺序冲突检查和最终设备树一致性验证。不能将“DTBO 结构可解析”或“fragment target 可解析”视为“DTBO 已成功应用”或“设备树与 Guest machine 兼容”。
+`apply_dtbo_sequence` 已将 phandle relocation、external/local fixup 写回、target resolution、owned-tree merge、symbol export 合并和 v17 输出串成原始 DTBO 有序流水线。流水线成功只证明结构与内部事务校验通过，不代表设备树与 Guest machine 兼容或 Guest 可启动。
 
 ## 5. 下一步
 
