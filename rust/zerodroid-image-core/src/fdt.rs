@@ -1292,7 +1292,12 @@ mod fixup_write_tests {
                 overlay_property_range: range(16, 4), property_offset: 0,
                 original_phandle: 2, relocated_phandle: 102,
             }],
-            declarations: vec![],
+            declarations: vec![FdtLocalFixup {
+                overlay_node_path: "/fragment@0/dev".to_owned(),
+                overlay_property: "phandle".to_owned(),
+                overlay_property_range: range(20, 4), property_offset: 0,
+                original_phandle: 2, relocated_phandle: 102,
+            }],
             base_max_phandle: 100, phandle_delta: 100,
         }
     }
@@ -1303,10 +1308,11 @@ mod fixup_write_tests {
         source[8..12].copy_from_slice(&2_u32.to_be_bytes());
         source[16..20].copy_from_slice(&2_u32.to_be_bytes());
         let writes = build_overlay_fixup_write_set(&source, &plan(), budget()).unwrap();
-        assert_eq!(writes.writes.len(), 2);
+        assert_eq!(writes.writes.len(), 3);
         let output = apply_overlay_fixup_write_set(&source, &writes, budget()).unwrap();
         assert_eq!(u32::from_be_bytes(output[8..12].try_into().unwrap()), 7);
         assert_eq!(u32::from_be_bytes(output[16..20].try_into().unwrap()), 102);
+        assert_eq!(u32::from_be_bytes(output[20..24].try_into().unwrap()), 102);
         assert_eq!(u32::from_be_bytes(source[8..12].try_into().unwrap()), 2);
         assert_eq!(u32::from_be_bytes(source[16..20].try_into().unwrap()), 2);
     }
