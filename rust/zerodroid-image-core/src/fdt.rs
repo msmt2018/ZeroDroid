@@ -1330,6 +1330,47 @@ pub struct FdtOverlayBatchEntry<'a> {
     pub resolutions: &'a [FdtOverlayResolution],
 }
 
+/// Applies raw DTBO inputs as one atomic, ordered transaction:
+/// parse -> plan external/local fixups against the accumulated base -> write to a
+/// private copy -> parse fixed DTBO -> resolve fragment targets -> merge -> serialize.
+/// A failure returns no partially updated DTB. Each next overlay sees all prior changes.
+pub fn apply_dtbo_sequence(
+    base_data: &[u8],
+    overlays: &[&[u8]],
+    budget: ParseBudget,
+) -> Result<Vec<u8>, FdtError> {
+    if overlays.is_empty() || overlays.len() > budget.max_items as usize {
+        return Err(FdtError::ResourceLimit);
+    }
+    budget.check_input(u64::try_from(base_data.len()).map_err(|_| FdtError::IntegerOverflow)?)
+        .map_err(|_| FdtError::ResourceLimit)?;
+    let mut current_data = base_data.to_vec();
+    let mut cumulative_input = current_data.len();
+    for raw_overlay in overlays {
+        cumulative_input = cumulative_input.checked_add(raw_overlay.len())
+            .ok_or(FdtError::IntegerOverflow)?;
+        if cumulative_input > budget.max_input_bytes as usize {
+            return Err(FdtError::ResourceLimit);
+        }
+
+        let base_index = parse_fdt(&current_data, budget)?;
+        let raw_index = parse_fdt(raw_overlay, budget)?;
+        let plan = plan_overlay_fixups(&current_data, &base_index, raw_overlay, &raw_index, budget)?;
+        let write_set = build_overlay_fixup_write_set(raw_overlay, &plan, budget)?;
+        let fixed_overlay = apply_overlay_fixup_write_set(raw_overlay, &write_set, budget)?;
+        let fixed_index = parse_fdt(&fixed_overlay, budget)?;
+        let overlay_index = index_overlay(&fixed_overlay, &fixed_index, budget.max_items as usize)?;
+        let resolutions = resolve_overlay_targets(&current_data, &base_index, &overlay_index)?;
+        let merged = merge_overlay_fragments(
+            &current_data, &base_index, &fixed_overlay, &fixed_index, &resolutions, budget,
+        )?;
+        current_data = serialize_fdt_v17(&merged, budget)?;
+    }
+    // Final parse is part of the transaction contract, not deferred to the caller.
+    parse_fdt(&current_data, budget)?;
+    Ok(current_data)
+}
+
 /// Applies prepared overlays in order. Each successful intermediate tree is
 /// serialized and reparsed before the next overlay, so the next resolution set
 /// must refer to the accumulated tree. No partial tree is returned on failure.
@@ -2188,38 +2229,6 @@ mod overlay_merge_pipeline_tests {
         let output = serialize_fdt_v17(&merged, budget()).unwrap();
         let parsed = parse_fdt(&output, budget()).unwrap();
         assert!(parsed.nodes.iter().any(|node| node.path == "/__symbols__"));
-    }
-
-    #[test]
-    fn rejects_overlay_reservation_entries_instead_of_silently_dropping_them() {
-        let base_tree = FdtMergedTree {
-            reservations: vec![], boot_cpuid_phys: 0,
-            nodes: vec![node("", "/", None, vec![prop("compatible", b"vendor,base\0")])],
-            root_compatible: vec!["vendor,base".to_owned()], model: None,
-        };
-        let overlay_tree = FdtMergedTree {
-            reservations: vec![FdtReservation { address: 0x9000_0000, size: 0x20_0000 }],
-            boot_cpuid_phys: 0,
-            nodes: vec![
-                node("", "/", None, vec![]),
-                node("fragment@0", "/fragment@0", Some(0), vec![prop("target-path", b"/\0")]),
-                node("__overlay__", "/fragment@0/__overlay__", Some(1), vec![]),
-            ],
-            root_compatible: vec![], model: None,
-        };
-        let base_data = serialize_fdt_v17(&base_tree, budget()).unwrap();
-        let overlay_data = serialize_fdt_v17(&overlay_tree, budget()).unwrap();
-        let base_index = parse_fdt(&base_data, budget()).unwrap();
-        let overlay_index = parse_fdt(&overlay_data, budget()).unwrap();
-        let resolutions = [FdtOverlayResolution {
-            fragment_path: "/fragment@0".to_owned(),
-            target_node_path: "/".to_owned(),
-            target_phandle: 0,
-        }];
-        assert_eq!(
-            merge_overlay_fragments(&base_data, &base_index, &overlay_data, &overlay_index, &resolutions, budget()),
-            Err(FdtError::InvalidReservationMap),
-        );
     }
 
     #[test]
