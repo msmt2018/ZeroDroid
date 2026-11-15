@@ -1309,7 +1309,7 @@ pub fn merge_overlay_sequence(
 
 /// Materializes a bounded, owned tree and applies the already-resolved fragment
 /// subtrees in fragment order. This is the merge stage only: serialization into a
-/// new DTB and symbol export rewriting are deliberately separate operations.
+/// new DTB; exported symbol rewriting is included in the returned owned tree.
 pub fn merge_overlay_fragments(
     base_data: &[u8],
     base: &FdtIndex,
@@ -2003,6 +2003,60 @@ mod overlay_merge_pipeline_tests {
         let output = serialize_fdt_v17(&merged, budget()).unwrap();
         let parsed = parse_fdt(&output, budget()).unwrap();
         assert!(parsed.nodes.iter().any(|node| node.path == "/__symbols__"));
+    }
+
+    #[test]
+    fn applies_ordered_overlay_sequence_against_accumulated_tree() {
+        let base_tree = FdtMergedTree {
+            reservations: vec![], boot_cpuid_phys: 0,
+            nodes: vec![
+                node("", "/", None, vec![prop("compatible", b"vendor,base\0")]),
+                node("soc", "/soc", Some(0), vec![]),
+            ],
+            root_compatible: vec!["vendor,base".to_owned()], model: None,
+        };
+        let first_tree = FdtMergedTree {
+            reservations: vec![], boot_cpuid_phys: 0,
+            nodes: vec![
+                node("", "/", None, vec![]),
+                node("fragment@0", "/fragment@0", Some(0), vec![prop("target-path", b"/soc\0")]),
+                node("__overlay__", "/fragment@0/__overlay__", Some(1), vec![]),
+                node("uart@1000", "/fragment@0/__overlay__/uart@1000", Some(2), vec![]),
+            ],
+            root_compatible: vec![], model: None,
+        };
+        let second_tree = FdtMergedTree {
+            reservations: vec![], boot_cpuid_phys: 0,
+            nodes: vec![
+                node("", "/", None, vec![]),
+                node("fragment@0", "/fragment@0", Some(0), vec![prop("target-path", b"/soc/uart@1000\0")]),
+                node("__overlay__", "/fragment@0/__overlay__", Some(1), vec![
+                    prop("status", b"okay\0"),
+                ]),
+            ],
+            root_compatible: vec![], model: None,
+        };
+        let base_data = serialize_fdt_v17(&base_tree, budget()).unwrap();
+        let first_data = serialize_fdt_v17(&first_tree, budget()).unwrap();
+        let second_data = serialize_fdt_v17(&second_tree, budget()).unwrap();
+        let base_index = parse_fdt(&base_data, budget()).unwrap();
+        let first_index = parse_fdt(&first_data, budget()).unwrap();
+        let second_index = parse_fdt(&second_data, budget()).unwrap();
+        let first_resolution = [FdtOverlayResolution {
+            fragment_path: "/fragment@0".to_owned(),
+            target_node_path: "/soc".to_owned(), target_phandle: 0,
+        }];
+        let second_resolution = [FdtOverlayResolution {
+            fragment_path: "/fragment@0".to_owned(),
+            target_node_path: "/soc/uart@1000".to_owned(), target_phandle: 0,
+        }];
+        let entries = [
+            FdtOverlayBatchEntry { data: &first_data, index: &first_index, resolutions: &first_resolution },
+            FdtOverlayBatchEntry { data: &second_data, index: &second_index, resolutions: &second_resolution },
+        ];
+        let merged = merge_overlay_sequence(&base_data, &base_index, &entries, budget()).unwrap();
+        let uart = merged.nodes.iter().find(|n| n.path == "/soc/uart@1000").unwrap();
+        assert_eq!(uart.properties.iter().find(|p| p.name == "status").unwrap().value, b"okay\0");
     }
 
     #[test]
