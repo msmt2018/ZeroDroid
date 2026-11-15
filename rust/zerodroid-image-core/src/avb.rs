@@ -45,6 +45,147 @@ pub struct AvbHashDescriptor {
     pub flags: u32,
 }
 
+/// AVB Hashtree descriptor (tag 1). Variable payload ranges reference the input buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AvbHashtreeDescriptor {
+    pub dm_verity_version: u32,
+    pub image_size: u64,
+    pub tree_offset: u64,
+    pub tree_size: u64,
+    pub data_block_size: u32,
+    pub hash_block_size: u32,
+    pub fec_num_roots: u32,
+    pub fec_offset: u64,
+    pub fec_size: u64,
+    pub hash_algorithm: String,
+    pub partition_name: String,
+    pub salt: Range<usize>,
+    pub root_digest: Range<usize>,
+    pub flags: u32,
+}
+
+/// AVB Chain Partition descriptor (tag 4), v1.0-v1.2 layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AvbChainPartitionDescriptor {
+    pub rollback_index_location: u32,
+    pub partition_name: String,
+    pub public_key: Range<usize>,
+}
+
+/// Reads an AVB fixed-width NUL-terminated string and verifies zero padding.
+fn avb_fixed_string(bytes: &[u8]) -> Result<String, AvbParseError> {
+    let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
+    if bytes[end..].iter().any(|b| *b != 0)
+        || !bytes[..end].iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        || end == 0
+    {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    core::str::from_utf8(&bytes[..end])
+        .map(str::to_owned)
+        .map_err(|_| AvbParseError::InvalidDescriptor)
+}
+
+/// Parses AVB Hashtree fields and returns salt/root-digest ranges without copying payloads.
+pub fn parse_hashtree_descriptor(
+    data: &[u8],
+    descriptor: &AvbDescriptor,
+) -> Result<AvbHashtreeDescriptor, AvbParseError> {
+    const TAG_HASHTREE: u64 = 1;
+    const FIXED_BODY_SIZE: usize = 164;
+    if descriptor.tag != TAG_HASHTREE || descriptor.body.len() < FIXED_BODY_SIZE {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    let body = data.get(descriptor.body.clone()).ok_or(AvbParseError::OutOfBounds)?;
+    let dm_verity_version = u32be(body, 0)?;
+    let image_size = u64be(body, 4)?;
+    let tree_offset = u64be(body, 12)?;
+    let tree_size = u64be(body, 20)?;
+    let data_block_size = u32be(body, 28)?;
+    let hash_block_size = u32be(body, 32)?;
+    let fec_num_roots = u32be(body, 36)?;
+    let fec_offset = u64be(body, 40)?;
+    let fec_size = u64be(body, 48)?;
+    let hash_algorithm = avb_fixed_string(body.get(56..88).ok_or(AvbParseError::InvalidDescriptor)?)?;
+    let partition_len = usize::try_from(u32be(body, 88)?).map_err(|_| AvbParseError::IntegerOverflow)?;
+    let salt_len = usize::try_from(u32be(body, 92)?).map_err(|_| AvbParseError::IntegerOverflow)?;
+    let digest_len = usize::try_from(u32be(body, 96)?).map_err(|_| AvbParseError::IntegerOverflow)?;
+    let flags = u32be(body, 100)?;
+    if flags & !3 != 0 || body.get(104..164).ok_or(AvbParseError::InvalidDescriptor)?.iter().any(|b| *b != 0) {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+
+    let variable_len = partition_len.checked_add(salt_len).and_then(|v| v.checked_add(digest_len))
+        .ok_or(AvbParseError::IntegerOverflow)?;
+    let padded_len = variable_len.checked_add(7).ok_or(AvbParseError::IntegerOverflow)? & !7;
+    if FIXED_BODY_SIZE.checked_add(padded_len).ok_or(AvbParseError::IntegerOverflow)? != body.len() {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    let variable_start = descriptor.body.start.checked_add(FIXED_BODY_SIZE)
+        .ok_or(AvbParseError::IntegerOverflow)?;
+    let partition_end = variable_start.checked_add(partition_len).ok_or(AvbParseError::IntegerOverflow)?;
+    let salt_end = partition_end.checked_add(salt_len).ok_or(AvbParseError::IntegerOverflow)?;
+    let digest_end = salt_end.checked_add(digest_len).ok_or(AvbParseError::IntegerOverflow)?;
+    if data.get(digest_end..descriptor.body.end).ok_or(AvbParseError::OutOfBounds)?
+        .iter().any(|b| *b != 0)
+    {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    let partition_name = core::str::from_utf8(data.get(variable_start..partition_end)
+        .ok_or(AvbParseError::OutOfBounds)?)
+        .map_err(|_| AvbParseError::InvalidDescriptor)?.to_owned();
+    if partition_name.is_empty() || partition_name.as_bytes().contains(&0) {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    Ok(AvbHashtreeDescriptor {
+        dm_verity_version, image_size, tree_offset, tree_size, data_block_size, hash_block_size,
+        fec_num_roots, fec_offset, fec_size, hash_algorithm, partition_name,
+        salt: partition_end..salt_end, root_digest: salt_end..digest_end, flags,
+    })
+}
+
+/// Parses the v1.0-v1.2 Chain Partition descriptor (no v1.3 flags field).
+pub fn parse_chain_partition_descriptor(
+    data: &[u8],
+    descriptor: &AvbDescriptor,
+) -> Result<AvbChainPartitionDescriptor, AvbParseError> {
+    const TAG_CHAIN_PARTITION: u64 = 4;
+    const FIXED_BODY_SIZE: usize = 76;
+    if descriptor.tag != TAG_CHAIN_PARTITION || descriptor.body.len() < FIXED_BODY_SIZE {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    let body = data.get(descriptor.body.clone()).ok_or(AvbParseError::OutOfBounds)?;
+    let rollback_index_location = u32be(body, 0)?;
+    let partition_len = usize::try_from(u32be(body, 4)?).map_err(|_| AvbParseError::IntegerOverflow)?;
+    let public_key_len = usize::try_from(u32be(body, 8)?).map_err(|_| AvbParseError::IntegerOverflow)?;
+    if body.get(12..76).ok_or(AvbParseError::InvalidDescriptor)?.iter().any(|b| *b != 0) {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    let variable_len = partition_len.checked_add(public_key_len).ok_or(AvbParseError::IntegerOverflow)?;
+    let padded_len = variable_len.checked_add(7).ok_or(AvbParseError::IntegerOverflow)? & !7;
+    if FIXED_BODY_SIZE.checked_add(padded_len).ok_or(AvbParseError::IntegerOverflow)? != body.len() {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    let variable_start = descriptor.body.start.checked_add(FIXED_BODY_SIZE)
+        .ok_or(AvbParseError::IntegerOverflow)?;
+    let partition_end = variable_start.checked_add(partition_len).ok_or(AvbParseError::IntegerOverflow)?;
+    let key_end = partition_end.checked_add(public_key_len).ok_or(AvbParseError::IntegerOverflow)?;
+    if data.get(key_end..descriptor.body.end).ok_or(AvbParseError::OutOfBounds)?
+        .iter().any(|b| *b != 0)
+    {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    let partition_name = core::str::from_utf8(data.get(variable_start..partition_end)
+        .ok_or(AvbParseError::OutOfBounds)?)
+        .map_err(|_| AvbParseError::InvalidDescriptor)?.to_owned();
+    if partition_name.is_empty() || partition_name.as_bytes().contains(&0) || public_key_len == 0 {
+        return Err(AvbParseError::InvalidDescriptor);
+    }
+    Ok(AvbChainPartitionDescriptor {
+        rollback_index_location, partition_name, public_key: partition_end..key_end,
+    })
+}
+
 /// Parses the typed fields of an AVB Hash descriptor without copying its salt or digest.
 pub fn parse_hash_descriptor(
     data: &[u8],
@@ -406,6 +547,71 @@ mod tests {
         data[body + 126] = 1;
         let parsed = parse_vbmeta(&data, budget()).unwrap();
         assert_eq!(parse_hash_descriptor(&data, &parsed.descriptors[0]), Err(AvbParseError::InvalidDescriptor));
+    }
+
+    #[test]
+    fn parses_hashtree_descriptor_and_checks_padding() {
+        let mut data = vbmeta();
+        data.resize(256 + 64 + 256, 0);
+        data[20..28].copy_from_slice(&256u64.to_be_bytes());
+        data[96..104].copy_from_slice(&48u64.to_be_bytes());
+        data[104..112].copy_from_slice(&184u64.to_be_bytes());
+        let start = 368usize;
+        data[start..start + 8].copy_from_slice(&1u64.to_be_bytes());
+        data[start + 8..start + 16].copy_from_slice(&168u64.to_be_bytes());
+        let body = start + 16;
+        data[body..body + 4].copy_from_slice(&1u32.to_be_bytes());
+        data[body + 4..body + 12].copy_from_slice(&4096u64.to_be_bytes());
+        data[body + 12..body + 20].copy_from_slice(&4096u64.to_be_bytes());
+        data[body + 20..body + 28].copy_from_slice(&1024u64.to_be_bytes());
+        data[body + 28..body + 32].copy_from_slice(&4096u32.to_be_bytes());
+        data[body + 32..body + 36].copy_from_slice(&4096u32.to_be_bytes());
+        data[body + 56..body + 62].copy_from_slice(b"sha256");
+        data[body + 88..body + 92].copy_from_slice(&4u32.to_be_bytes());
+        data[body + 92..body + 96].copy_from_slice(&2u32.to_be_bytes());
+        data[body + 96..body + 100].copy_from_slice(&4u32.to_be_bytes());
+        data[body + 164..body + 168].copy_from_slice(b"root");
+        data[body + 168..body + 170].copy_from_slice(&[0xaa, 0xbb]);
+        data[body + 170..body + 174].copy_from_slice(&[1, 2, 3, 4]);
+        let parsed = parse_vbmeta(&data, budget()).unwrap();
+        let tree = parse_hashtree_descriptor(&data, &parsed.descriptors[0]).unwrap();
+        assert_eq!(tree.image_size, 4096);
+        assert_eq!(tree.tree_offset, 4096);
+        assert_eq!(tree.hash_algorithm, "sha256");
+        assert_eq!(tree.partition_name, "root");
+        assert_eq!(tree.salt, body + 168..body + 170);
+        assert_eq!(tree.root_digest, body + 170..body + 174);
+
+        data[body + 174] = 1;
+        let parsed = parse_vbmeta(&data, budget()).unwrap();
+        assert_eq!(parse_hashtree_descriptor(&data, &parsed.descriptors[0]), Err(AvbParseError::InvalidDescriptor));
+    }
+
+    #[test]
+    fn parses_legacy_chain_partition_descriptor_and_rejects_empty_key() {
+        let mut data = vbmeta();
+        data.resize(256 + 64 + 256, 0);
+        data[20..28].copy_from_slice(&256u64.to_be_bytes());
+        data[96..104].copy_from_slice(&48u64.to_be_bytes());
+        data[104..112].copy_from_slice(&96u64.to_be_bytes());
+        let start = 368usize;
+        data[start..start + 8].copy_from_slice(&4u64.to_be_bytes());
+        data[start + 8..start + 16].copy_from_slice(&80u64.to_be_bytes());
+        let body = start + 16;
+        data[body..body + 4].copy_from_slice(&3u32.to_be_bytes());
+        data[body + 4..body + 8].copy_from_slice(&4u32.to_be_bytes());
+        data[body + 8..body + 12].copy_from_slice(&4u32.to_be_bytes());
+        data[body + 76..body + 80].copy_from_slice(b"vbme");
+        data[body + 80..body + 84].copy_from_slice(&[9, 8, 7, 6]);
+        let parsed = parse_vbmeta(&data, budget()).unwrap();
+        let chain = parse_chain_partition_descriptor(&data, &parsed.descriptors[0]).unwrap();
+        assert_eq!(chain.rollback_index_location, 3);
+        assert_eq!(chain.partition_name, "vbme");
+        assert_eq!(chain.public_key, body + 80..body + 84);
+
+        data[body + 8..body + 12].copy_from_slice(&0u32.to_be_bytes());
+        let parsed = parse_vbmeta(&data, budget()).unwrap();
+        assert_eq!(parse_chain_partition_descriptor(&data, &parsed.descriptors[0]), Err(AvbParseError::InvalidDescriptor));
     }
 
     #[test]
