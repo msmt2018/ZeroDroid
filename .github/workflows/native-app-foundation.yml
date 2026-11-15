@@ -144,7 +144,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Run Rust tests
+      - name: Install device-tree-compiler for interoperability fixtures
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes device-tree-compiler
+      - name: Generate real DTB and DTBO fixtures with symbols and fixups
+        run: |
+          mkdir -p rust/zerodroid-image-core/tests/fixtures-generated
+          dtc -@ -I dts -O dtb \
+            -o rust/zerodroid-image-core/tests/fixtures-generated/base.dtb \
+            rust/zerodroid-image-core/tests/fixtures-dtc/base.dts
+          dtc -@ -I dts -O dtb \
+            -o rust/zerodroid-image-core/tests/fixtures-generated/overlay.dtbo \
+            rust/zerodroid-image-core/tests/fixtures-dtc/overlay.dtso
+      - name: Run Rust tests including real dtc interoperability
+        env:
+          ZERODROID_DTC_FIXTURES: "1"
         run: cargo test --workspace --locked
   android:
     runs-on: ubuntu-latest
