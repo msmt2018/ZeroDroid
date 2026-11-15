@@ -2362,6 +2362,54 @@ mod overlay_merge_pipeline_tests {
     }
 
     #[test]
+    fn raw_pipeline_relocates_phandle_declarations_and_local_references_together() {
+        let base_tree = FdtMergedTree {
+            reservations: vec![], boot_cpuid_phys: 0,
+            nodes: vec![
+                node("", "/", None, vec![prop("compatible", b"vendor,base\0")]),
+                node("__symbols__", "/__symbols__", Some(0), vec![prop("soc", b"/soc\0")]),
+                node("soc", "/soc", Some(0), vec![prop("phandle", &100_u32.to_be_bytes())]),
+            ],
+            root_compatible: vec!["vendor,base".to_owned()], model: None,
+        };
+        let overlay_tree = FdtMergedTree {
+            reservations: vec![], boot_cpuid_phys: 0,
+            nodes: vec![
+                node("", "/", None, vec![]),
+                node("fragment@0", "/fragment@0", Some(0), vec![
+                    prop("target", &u32::MAX.to_be_bytes()),
+                ]),
+                node("__overlay__", "/fragment@0/__overlay__", Some(1), vec![]),
+                node("dev", "/fragment@0/__overlay__/dev", Some(2), vec![
+                    prop("phandle", &1_u32.to_be_bytes()),
+                    prop("link", &1_u32.to_be_bytes()),
+                ]),
+                node("__fixups__", "/__fixups__", Some(0), vec![
+                    prop("soc", b"/fragment@0:target:0\0"),
+                ]),
+                node("__local_fixups__", "/__local_fixups__", Some(0), vec![]),
+                node("fragment@0", "/__local_fixups__/fragment@0", Some(5), vec![]),
+                node("__overlay__", "/__local_fixups__/fragment@0/__overlay__", Some(6), vec![]),
+                node("dev", "/__local_fixups__/fragment@0/__overlay__/dev", Some(7), vec![
+                    prop("link", &0_u32.to_be_bytes()),
+                ]),
+            ],
+            root_compatible: vec![], model: None,
+        };
+        let base = serialize_fdt_v17(&base_tree, budget()).unwrap();
+        let overlay = serialize_fdt_v17(&overlay_tree, budget()).unwrap();
+        let output = apply_dtbo_sequence(&base, &[&overlay], budget()).unwrap();
+        let parsed = parse_fdt(&output, budget()).unwrap();
+        let dev = parsed.nodes.iter().find(|n| n.path == "/soc/dev").unwrap();
+        let read = |name: &str| {
+            let property = dev.properties.iter().find(|p| p.name == name).unwrap();
+            be32(&output, property.value.start).unwrap()
+        };
+        assert_eq!(read("phandle"), 101);
+        assert_eq!(read("link"), 101);
+    }
+
+    #[test]
     fn raw_dtbo_sequence_runs_fixup_resolve_merge_and_serialization_pipeline() {
         let base_tree = FdtMergedTree {
             reservations: vec![], boot_cpuid_phys: 0,
