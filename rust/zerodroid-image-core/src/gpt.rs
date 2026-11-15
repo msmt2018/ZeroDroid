@@ -489,7 +489,7 @@ mod tests {
         assert_eq!(parsed_backup.current_lba, 99);
         assert_eq!(parsed_backup.partition_array_range, 98 * 512..98 * 512 + 128);
 
-        disk[99 * 512 + 56] ^= 1;
+        disk[98 * 512] ^= 1;
         assert_eq!(validate_backup_gpt(&disk, &primary, budget()), Err(ParseError::ChecksumMismatch));
     }
 
