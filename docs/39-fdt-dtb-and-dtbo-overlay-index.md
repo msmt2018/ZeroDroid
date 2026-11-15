@@ -25,11 +25,11 @@
 
 `index_overlay` 提取根级 `fragment@*` 的 `target` 或 `target-path`、`__overlay__` 子树是否存在，以及 `__fixups__`/`__local_fixups__` 是否存在。
 
-这不是 Overlay 应用器。尚未完成 phandle 重定位、符号解析、external/local fixup 写回、overlay merge、目标节点解析和多 overlay 顺序冲突检查。不能将“DTBO 结构可解析”视为“DTBO 已成功应用”或“设备树与 Guest machine 兼容”。
+这不是 Overlay 应用器。当前已增加只读 target 解析：对 base DTB 建立排序后的 phandle 索引，拒绝无效/重复 phandle，并将 fragment 的 target-path 或 target phandle 精确映射到 base 节点；fragment 缺少 `__overlay__` 子树时拒绝生成解析结果。该阶段不修改任一 DTB。\n\n尚未完成 phandle 重定位、符号解析、external/local fixup 写回、overlay merge、多 overlay 顺序冲突检查和最终设备树一致性验证。不能将“DTBO 结构可解析”或“fragment target 可解析”视为“DTBO 已成功应用”或“设备树与 Guest machine 兼容”。
 
 ## 5. 下一步
 
 - 支持 FDT v16 header 的独立兼容解析路径（不能复用 v17 header layout）。
-- 完善 DTBO fragment target/phandle 解析、fixup 解析和 overlay 应用计划。
+- 完成 DTBO external/local fixup 解析、符号解析与 overlay 应用计划。
 - 建立 Guest Platform Profile 的 compatible、CPU、memory、interrupt-controller、timer、GIC、PSCI、UART、VirtIO 节点约束。
 - 将解析结果接入 Boot Material Set，同时继续保持启动链验证状态独立。
