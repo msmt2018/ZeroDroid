@@ -28,6 +28,10 @@ pub enum FdtError {
     MissingOverlayTarget,
     DuplicatePhandle,
     InvalidPhandle,
+    MissingSymbols,
+    MissingSymbol,
+    InvalidSymbol,
+    InvalidFixup,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -691,4 +695,231 @@ mod tests {
         assert_eq!(resolve_overlay_targets(&data, &base, &overlay), Err(FdtError::MissingOverlaySubtree));
     }
 
+}
+
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FdtExternalFixup {
+    pub symbol: String,
+    pub target_node_path: String,
+    pub target_phandle: u32,
+    pub overlay_property: String,
+    pub overlay_property_range: Range<usize>,
+    pub property_offset: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FdtLocalFixup {
+    pub overlay_node_path: String,
+    pub overlay_property: String,
+    pub overlay_property_range: Range<usize>,
+    pub property_offset: u32,
+    pub original_phandle: u32,
+    pub relocated_phandle: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FdtOverlayFixupPlan {
+    pub external: Vec<FdtExternalFixup>,
+    pub local: Vec<FdtLocalFixup>,
+    pub base_max_phandle: u32,
+    pub phandle_delta: u32,
+}
+
+/// Finds a node by its canonical absolute FDT path.
+fn node_by_path<'a>(index: &'a FdtIndex, path: &str) -> Option<&'a FdtNode> {
+    index.nodes.iter().find(|node| node.path == path)
+}
+
+fn property_by_name<'a>(node: &'a FdtNode, name: &str) -> Option<&'a FdtProperty> {
+    node.properties.iter().find(|property| property.name == name)
+}
+
+fn read_be32_at(data: &[u8], range: &Range<usize>, offset: u32) -> Result<u32, FdtError> {
+    let relative = usize::try_from(offset).map_err(|_| FdtError::IntegerOverflow)?;
+    let start = range.start.checked_add(relative).ok_or(FdtError::IntegerOverflow)?;
+    let end = start.checked_add(4).ok_or(FdtError::IntegerOverflow)?;
+    if end > range.end {
+        return Err(FdtError::InvalidFixup);
+    }
+    be32(data, start)
+}
+
+fn read_nul_strings(bytes: &[u8]) -> Result<Vec<&str>, FdtError> {
+    if bytes.is_empty() || bytes.last() != Some(&0) {
+        return Err(FdtError::InvalidFixup);
+    }
+    let mut result = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < bytes.len() {
+        let remaining = &bytes[cursor..];
+        let length = remaining.iter().position(|byte| *byte == 0)
+            .ok_or(FdtError::InvalidFixup)?;
+        if length == 0 {
+            return Err(FdtError::InvalidFixup);
+        }
+        let value = core::str::from_utf8(&remaining[..length])
+            .map_err(|_| FdtError::InvalidUtf8)?;
+        result.push(value);
+        cursor = cursor.checked_add(length).and_then(|v| v.checked_add(1))
+            .ok_or(FdtError::IntegerOverflow)?;
+    }
+    Ok(result)
+}
+
+fn parse_external_location(value: &str) -> Result<(&str, &str, u32), FdtError> {
+    let mut parts = value.rsplitn(3, ':');
+    let offset = parts.next().ok_or(FdtError::InvalidFixup)?;
+    let property = parts.next().ok_or(FdtError::InvalidFixup)?;
+    let path = parts.next().ok_or(FdtError::InvalidFixup)?;
+    if path.is_empty() || !path.starts_with('/') || property.is_empty() || offset.is_empty()
+        || !offset.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(FdtError::InvalidFixup);
+    }
+    let parsed = u32::from_str_radix(offset, 16).map_err(|_| FdtError::InvalidFixup)?;
+    if parsed % 4 != 0 {
+        return Err(FdtError::InvalidFixup);
+    }
+    Ok((path, property, parsed))
+}
+
+/// Builds a read-only fixup plan for one overlay against one base tree.
+/// The caller must apply the returned writes to a separate bounded output buffer;
+/// this function never mutates either input.
+pub fn plan_overlay_fixups(
+    base_data: &[u8],
+    base: &FdtIndex,
+    overlay_data: &[u8],
+    overlay_index: &FdtIndex,
+    budget: ParseBudget,
+) -> Result<FdtOverlayFixupPlan, FdtError> {
+    let mut base_phandles = Vec::new();
+    for node in &base.nodes {
+        let mut value = None;
+        for property in &node.properties {
+            if property.name == "phandle" || property.name == "linux,phandle" {
+                let bytes = base_data.get(property.value.clone()).ok_or(FdtError::InvalidRange)?;
+                if bytes.len() != 4 { return Err(FdtError::InvalidPhandle); }
+                let current = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                if current == 0 || current == u32::MAX
+                    || value.is_some_and(|previous| previous != current)
+                {
+                    return Err(FdtError::InvalidPhandle);
+                }
+                value = Some(current);
+            }
+        }
+        if let Some(phandle) = value { base_phandles.push(phandle); }
+    }
+    base_phandles.sort_unstable();
+    if base_phandles.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(FdtError::DuplicatePhandle);
+    }
+    let base_max_phandle = base_phandles.last().copied().unwrap_or(0);
+    let phandle_delta = base_max_phandle;
+    let mut external = Vec::new();
+    let mut local = Vec::new();
+
+    if let Some(fixup_node) = node_by_path(overlay_index, "/__fixups__") {
+        let symbols = node_by_path(base, "/__symbols__").ok_or(FdtError::MissingSymbols)?;
+        for fixup_property in &fixup_node.properties {
+            let symbol_bytes = base_data.get(property_by_name(symbols, &fixup_property.name)
+                .ok_or(FdtError::MissingSymbol)?.value.clone()).ok_or(FdtError::InvalidRange)?;
+            let symbol_path = c_string(symbol_bytes)?;
+            if symbol_path.len() + 1 != symbol_bytes.len() || !symbol_path.starts_with('/') {
+                return Err(FdtError::InvalidSymbol);
+            }
+            let target = node_by_path(base, symbol_path).ok_or(FdtError::MissingOverlayTarget)?;
+            let target_property = property_by_name(target, "phandle")
+                .or_else(|| property_by_name(target, "linux,phandle"))
+                .ok_or(FdtError::InvalidPhandle)?;
+            let target_bytes = base_data.get(target_property.value.clone()).ok_or(FdtError::InvalidRange)?;
+            if target_bytes.len() != 4 { return Err(FdtError::InvalidPhandle); }
+            let target_phandle = u32::from_be_bytes([
+                target_bytes[0], target_bytes[1], target_bytes[2], target_bytes[3],
+            ]);
+            if target_phandle == 0 || target_phandle == u32::MAX {
+                return Err(FdtError::InvalidPhandle);
+            }
+            let locations = overlay_data.get(fixup_property.value.clone())
+                .ok_or(FdtError::InvalidRange)?;
+            for location in read_nul_strings(locations)? {
+                let (path, property_name, offset) = parse_external_location(location)?;
+                let overlay_node = node_by_path(overlay_index, path)
+                    .ok_or(FdtError::InvalidFixup)?;
+                let target_property = property_by_name(overlay_node, property_name)
+                    .ok_or(FdtError::InvalidFixup)?;
+                read_be32_at(overlay_data, &target_property.value, offset)?;
+                external.push(FdtExternalFixup {
+                    symbol: fixup_property.name.clone(),
+                    target_node_path: symbol_path.to_owned(),
+                    target_phandle,
+                    overlay_property: property_name.to_owned(),
+                    overlay_property_range: target_property.value.clone(),
+                    property_offset: offset,
+                });
+                if external.len() > budget.max_items as usize {
+                    return Err(FdtError::ResourceLimit);
+                }
+            }
+        }
+    }
+
+    if let Some(local_root) = node_by_path(overlay_index, "/__local_fixups__") {
+        for fixup_node in overlay_index.nodes.iter().filter(|node| {
+            node.path.starts_with("/__local_fixups__/") && node.path != "/__local_fixups__"
+        }) {
+            let suffix = fixup_node.path.strip_prefix("/__local_fixups__")
+                .ok_or(FdtError::InvalidFixup)?;
+            let overlay_path = if suffix.is_empty() { "/" } else { suffix };
+            let overlay_node = node_by_path(overlay_index, overlay_path)
+                .ok_or(FdtError::InvalidFixup)?;
+            for offset_property in &fixup_node.properties {
+                let overlay_property = property_by_name(overlay_node, &offset_property.name)
+                    .ok_or(FdtError::InvalidFixup)?;
+                let encoded_offsets = overlay_data.get(offset_property.value.clone())
+                    .ok_or(FdtError::InvalidRange)?;
+                if encoded_offsets.is_empty() || encoded_offsets.len() % 4 != 0 {
+                    return Err(FdtError::InvalidFixup);
+                }
+                for chunk in encoded_offsets.chunks_exact(4) {
+                    let offset = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                    if offset % 4 != 0 {
+                        return Err(FdtError::InvalidFixup);
+                    }
+                    let original_phandle = read_be32_at(
+                        overlay_data, &overlay_property.value, offset,
+                    )?;
+                    if original_phandle == 0 || original_phandle == u32::MAX {
+                        return Err(FdtError::InvalidPhandle);
+                    }
+                    let relocated_phandle = original_phandle.checked_add(phandle_delta)
+                        .ok_or(FdtError::InvalidPhandle)?;
+                    if relocated_phandle == 0 || relocated_phandle == u32::MAX {
+                        return Err(FdtError::InvalidPhandle);
+                    }
+                    local.push(FdtLocalFixup {
+                        overlay_node_path: overlay_path.to_owned(),
+                        overlay_property: offset_property.name.clone(),
+                        overlay_property_range: overlay_property.value.clone(),
+                        property_offset: offset,
+                        original_phandle,
+                        relocated_phandle,
+                    });
+                    if local.len() > budget.max_items as usize {
+                        return Err(FdtError::ResourceLimit);
+                    }
+                }
+            }
+        }
+        let _ = local_root;
+    }
+
+    Ok(FdtOverlayFixupPlan {
+        external,
+        local,
+        base_max_phandle,
+        phandle_delta,
+    })
 }
