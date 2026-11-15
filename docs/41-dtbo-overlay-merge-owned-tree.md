@@ -25,7 +25,7 @@
 
 ## 尚未完成
 
-该阶段已经具备 FDT v17 serializer：重新生成 strings/structure/reservation blocks，计算偏移和长度，并通过 `parse_fdt` round-trip 验证。`__symbols__` 导出路径重写也已接入单次 merge。另已增加 `FdtOverlayBatchEntry` / `merge_overlay_sequence(...)` 有序事务入口：每个 overlay 以当前累计 DTB 重新解析后的索引为基准执行，序列化并 round-trip 后才进入下一项；失败时不返回部分树。调用者必须为每一项提供针对当时累计树计算的 resolutions，并预先完成该项 fixup。跨 overlay 的完整资源冲突策略、reservation map 的显式合并能力，以及真实 dtc/libfdt 生成的 DTB/DTBO fixtures 仍待实现。当前非空 Overlay reservation map 会 fail-closed 拒绝；merge 入口还会重新解析并比对调用者传入的 FDT index，拒绝过期或与输入字节不匹配的索引。当前函数也要求调用者先完成 fixup 并提供可信的 target resolution；它不执行 fixup、不验证签名，也不证明 Guest 可启动。
+该阶段已经具备 FDT v17 serializer：重新生成 strings/structure/reservation blocks，计算偏移和长度，并通过 `parse_fdt` round-trip 验证。`__symbols__` 导出路径重写也已接入单次 merge。另已增加 `FdtOverlayBatchEntry` / `merge_overlay_sequence(...)` 有序事务入口：每个 overlay 以当前累计 DTB 重新解析后的索引为基准执行，序列化并 round-trip 后才进入下一项；失败时不返回部分树。调用者必须为每一项提供针对当时累计树计算的 resolutions，并预先完成该项 fixup。跨 overlay 的完整资源冲突策略、reservation map 的显式合并能力，以及真实 dtc/libfdt 生成的 DTB/DTBO fixtures 仍待实现。当前非空 Overlay reservation map 会 fail-closed 拒绝；merge 入口还会重新解析并比对调用者传入的 FDT index，拒绝过期或与输入字节不匹配的索引；同时逐项验证 resolution 与 DTBO fragment 的真实 `target-path`/`target`、基础树目标节点 phandle 及 fragment 完整性，拒绝伪造、遗漏或重复的 resolution。当前函数也要求调用者先完成 fixup 并提供可信的 target resolution；它不执行 fixup、不验证签名，也不证明 Guest 可启动。
 
 ## Overlay `__symbols__` 导出合并
 
