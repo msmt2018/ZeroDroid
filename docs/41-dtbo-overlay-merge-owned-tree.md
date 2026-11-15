@@ -26,3 +26,17 @@
 ## 尚未完成
 
 这不是完整 DTB 输出。下一阶段仍需实现 canonical FDT v17 serializer：重新生成 strings/structure/reservation blocks，计算所有偏移和长度，执行预算检查，再通过 `parse_fdt` 对输出做 round-trip 验证。还需合并并重写 `__symbols__` 导出路径、定义多 DTBO 事务/冲突策略，并增加真实 dtc 生成的 DTB/DTBO fixtures。当前函数也要求调用者先完成 fixup 并提供可信的 target resolution；它不执行 fixup、不验证签名，也不证明 Guest 可启动。
+
+## FDT v17 序列化与 round-trip
+
+`serialize_fdt_v17(tree, budget)` 将拥有树编码为 FDT v17：
+
+- 生成唯一 property-name strings table 和对应 offset。
+- 按节点先属性、后子节点的顺序输出 BEGIN_NODE/PROP/END_NODE token。
+- 输出 8-byte 对齐的 reservation map（含终止记录）。
+- 重建 header 中的 structure/string/reservation offsets、长度、版本和 boot CPU ID。
+- 在返回前重新调用 `parse_fdt`，核对节点路径/父索引/属性字节/reservations/boot CPU ID。
+
+序列化输入拓扑、属性名、重复属性、保留区域及输出长度均受检查和 ParseBudget 限制。round-trip 失败时不返回 DTB。
+
+这仍是结构序列化与自校验，不是 AVB 签名验证、DTB 来源认证或真实设备启动验证。Overlay `__symbols__` 导出合并与路径重写仍未完成；真实 dtc 生成的跨版本 fixture 和多 DTBO 事务测试仍是后续工作。
