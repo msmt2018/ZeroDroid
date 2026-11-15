@@ -1031,7 +1031,7 @@ mod fixup_tests {
     #[test]
     fn rejects_misaligned_or_out_of_range_local_fixup_offsets() {
         let (base_data, base) = base_fixture();
-        let (overlay_data, mut overlay) = overlay_fixture();
+        let (mut overlay_data, overlay) = overlay_fixture();
         overlay_data[overlay.nodes[8].properties[0].value.clone()]
             .copy_from_slice(&1_u32.to_be_bytes());
         assert_eq!(
