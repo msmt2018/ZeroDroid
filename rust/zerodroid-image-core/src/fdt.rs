@@ -397,6 +397,22 @@ pub fn index_overlay(data: &[u8], index: &FdtIndex, max_fragments: usize) -> Res
     })
 }
 
+
+
+/// Parses the DTB payload indexed by vendor_boot. The returned property ranges
+/// continue to address the original vendor_boot byte slice.
+pub fn parse_vendor_boot_dtb<'a>(
+    vendor_boot_data: &'a [u8],
+    vendor_boot: &crate::vendor_boot::VendorBootImageIndex,
+    budget: ParseBudget,
+) -> Result<FdtIndex, FdtError> {
+    let range = vendor_boot.dtb.clone();
+    if range.start >= range.end || range.end > vendor_boot_data.len() {
+        return Err(FdtError::InvalidRange);
+    }
+    parse_fdt(&vendor_boot_data[range], budget)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
