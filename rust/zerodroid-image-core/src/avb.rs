@@ -1,7 +1,7 @@
 use core::ops::Range;
 
-const VBMeta_MAGIC: &[u8; 4] = b"AVB0";
-const VBMeta_HEADER_SIZE: usize = 256;
+const VBMETA_MAGIC: &[u8; 4] = b"AVB0";
+const VBMETA_HEADER_SIZE: usize = 256;
 const DESCRIPTOR_HEADER_SIZE: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,10 +120,10 @@ pub fn parse_vbmeta(
     if u64::try_from(data.len()).map_err(|_| AvbParseError::IntegerOverflow)? > budget.max_input_bytes {
         return Err(AvbParseError::ResourceLimit);
     }
-    if data.len() < VBMeta_HEADER_SIZE {
+    if data.len() < VBMETA_HEADER_SIZE {
         return Err(AvbParseError::OutOfBounds);
     }
-    if data.get(..4) != Some(VBMeta_MAGIC.as_slice()) {
+    if data.get(..4) != Some(VBMETA_MAGIC.as_slice()) {
         return Err(AvbParseError::InvalidMagic);
     }
 
@@ -166,7 +166,7 @@ pub fn parse_vbmeta(
         return Err(AvbParseError::InvalidBlockLayout);
     }
 
-    let auth_start = VBMeta_HEADER_SIZE;
+    let auth_start = VBMETA_HEADER_SIZE;
     let auth_end_u64 = u64::try_from(auth_start)
         .map_err(|_| AvbParseError::IntegerOverflow)?
         .checked_add(authentication_block_size)
@@ -272,7 +272,7 @@ mod tests {
         data[112..120].copy_from_slice(&7u64.to_be_bytes());
         data[120..124].copy_from_slice(&0u32.to_be_bytes());
         data[124..128].copy_from_slice(&0u32.to_be_bytes());
-        data[128..136].copy_from_slice(b"avbtool");
+        data[128..135].copy_from_slice(b"avbtool");
         // Authentication block: hash [256,288), signature [288,320).
         // Auxiliary block: public key [320,352), metadata [352,368), descriptor [368,384).
         data[368..376].copy_from_slice(&0u64.to_be_bytes());
