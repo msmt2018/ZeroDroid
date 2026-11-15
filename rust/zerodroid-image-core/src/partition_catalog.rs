@@ -106,7 +106,7 @@ fn gpt_name(raw: &[u8; 72]) -> Result<String, CatalogError> {
     if units.is_empty() { return Err(CatalogError::InvalidGptName); }
     let decoded: Result<String, _> = char::decode_utf16(units).collect();
     let name = decoded.map_err(|_| CatalogError::InvalidGptName)?;
-    if name.chars().any(char::is_control) { return Err(CatalogError::InvalidGptName); }
+    if name.chars().any(|ch| ch.is_control()) { return Err(CatalogError::InvalidGptName); }
     Ok(name)
 }
 
