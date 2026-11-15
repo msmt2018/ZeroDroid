@@ -1676,7 +1676,9 @@ fn emit_owned_node(
     depth: usize,
     budget: ParseBudget,
 ) -> Result<(), FdtError> {
-    if depth > budget.max_nesting_depth as usize {
+    // parse_fdt counts the root as nesting level one, so the deepest valid
+    // node has zero-based depth max_nesting_depth - 1.
+    if depth >= budget.max_nesting_depth as usize {
         return Err(FdtError::ResourceLimit);
     }
     let node = tree.nodes.get(node_index).ok_or(FdtError::InvalidStructure)?;
@@ -1684,6 +1686,9 @@ fn emit_owned_node(
     structure.extend_from_slice(node.name.as_bytes());
     structure.push(0);
     while structure.len() % 4 != 0 { structure.push(0); }
+    if structure.len() > budget.max_input_bytes as usize {
+        return Err(FdtError::ResourceLimit);
+    }
 
     for property in &node.properties {
         let name_offset = name_offsets.iter().find(|(name, _)| name == &property.name)
