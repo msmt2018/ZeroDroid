@@ -608,4 +608,87 @@ mod tests {
         assert!(!overlay.has_local_fixups);
     }
 
+
+    fn base_with_phandle(values: &[u32]) -> (Vec<u8>, FdtIndex) {
+        let mut data = Vec::new();
+        let mut nodes = Vec::new();
+        for (index, value) in values.iter().enumerate() {
+            let start = data.len();
+            data.extend_from_slice(&value.to_be_bytes());
+            nodes.push(FdtNode {
+                name: if index == 0 { String::new() } else { format!("node@{index}") },
+                path: if index == 0 { "/".to_owned() } else { format!("/node@{index}") },
+                parent: if index == 0 { None } else { Some(0) },
+                properties: vec![FdtProperty { name: "phandle".to_owned(), value: start..start + 4 }],
+            });
+        }
+        (data, FdtIndex {
+            header: FdtHeader { total_size: 0, version: 17, last_compatible_version: 16,
+                boot_cpuid_phys: 0, structure_size: 0, strings_size: 0 },
+            reservations: Vec::new(), nodes, root_compatible: Vec::new(), model: None,
+            structure: 0..0, strings: 0..0,
+        })
+    }
+
+    #[test]
+    fn resolves_overlay_phandle_to_base_node() {
+        let (data, base) = base_with_phandle(&[1, 42]);
+        let overlay = FdtOverlayIndex {
+            fragments: vec![FdtOverlayFragment {
+                path: "/fragment@0".to_owned(), target_phandle: Some(42),
+                target_path: None, has_overlay_subtree: true,
+            }],
+            has_external_fixups: false, has_local_fixups: false,
+        };
+        let resolved = resolve_overlay_targets(&data, &base, &overlay).unwrap();
+        assert_eq!(resolved[0].target_node_path, "/node@1");
+        assert_eq!(resolved[0].target_phandle, 42);
+    }
+
+    #[test]
+    fn resolves_overlay_target_path_exactly() {
+        let (data, base) = base_with_phandle(&[1, 42]);
+        let overlay = FdtOverlayIndex {
+            fragments: vec![FdtOverlayFragment {
+                path: "/fragment@0".to_owned(), target_phandle: None,
+                target_path: Some("/node@1".to_owned()), has_overlay_subtree: true,
+            }],
+            has_external_fixups: false, has_local_fixups: false,
+        };
+        assert_eq!(resolve_overlay_targets(&data, &base, &overlay).unwrap()[0].target_node_path, "/node@1");
+        let mut missing = overlay.clone();
+        missing.fragments[0].target_path = Some("/node".to_owned());
+        assert_eq!(resolve_overlay_targets(&data, &base, &missing), Err(FdtError::MissingOverlayTarget));
+    }
+
+    #[test]
+    fn rejects_duplicate_invalid_and_missing_phandles() {
+        let (data, duplicate) = base_with_phandle(&[1, 42, 42]);
+        let overlay = FdtOverlayIndex {
+            fragments: vec![FdtOverlayFragment {
+                path: "/fragment@0".to_owned(), target_phandle: Some(42),
+                target_path: None, has_overlay_subtree: true,
+            }],
+            has_external_fixups: false, has_local_fixups: false,
+        };
+        assert_eq!(resolve_overlay_targets(&data, &duplicate, &overlay), Err(FdtError::DuplicatePhandle));
+        let (data, invalid) = base_with_phandle(&[u32::MAX]);
+        assert_eq!(resolve_overlay_targets(&data, &invalid, &overlay), Err(FdtError::InvalidPhandle));
+        let (data, base) = base_with_phandle(&[1]);
+        assert_eq!(resolve_overlay_targets(&data, &base, &overlay), Err(FdtError::MissingOverlayTarget));
+    }
+
+    #[test]
+    fn requires_overlay_subtree_before_resolution() {
+        let (data, base) = base_with_phandle(&[1, 42]);
+        let overlay = FdtOverlayIndex {
+            fragments: vec![FdtOverlayFragment {
+                path: "/fragment@0".to_owned(), target_phandle: Some(42),
+                target_path: None, has_overlay_subtree: false,
+            }],
+            has_external_fixups: false, has_local_fixups: false,
+        };
+        assert_eq!(resolve_overlay_targets(&data, &base, &overlay), Err(FdtError::MissingOverlaySubtree));
+    }
+
 }
