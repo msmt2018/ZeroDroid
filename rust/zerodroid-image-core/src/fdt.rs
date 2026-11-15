@@ -32,6 +32,7 @@ pub enum FdtError {
     MissingSymbol,
     InvalidSymbol,
     InvalidFixup,
+    FixupWriteConflict,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1042,6 +1043,197 @@ mod fixup_tests {
         assert_eq!(
             plan_overlay_fixups(&base_data, &base, &overlay_data, &overlay, budget()),
             Err(FdtError::InvalidFixup),
+        );
+    }
+}
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FdtFixupWriteKind {
+    External,
+    Local,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FdtFixupWrite {
+    /// Absolute byte range in the original DTBO byte slice.
+    pub range: Range<usize>,
+    pub value: u32,
+    pub kind: FdtFixupWriteKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FdtOverlayWriteSet {
+    pub writes: Vec<FdtFixupWrite>,
+    pub output_size: usize,
+}
+
+/// Converts independent fixup records into a single sorted write set.
+/// Duplicate or overlapping 32-bit writes are rejected before any output is allocated.
+pub fn build_overlay_fixup_write_set(
+    overlay_data: &[u8],
+    plan: &FdtOverlayFixupPlan,
+    budget: ParseBudget,
+) -> Result<FdtOverlayWriteSet, FdtError> {
+    budget.check_input(u64::try_from(overlay_data.len()).map_err(|_| FdtError::IntegerOverflow)?)
+        .map_err(|_| FdtError::ResourceLimit)?;
+    let total = plan.external.len().checked_add(plan.local.len())
+        .ok_or(FdtError::IntegerOverflow)?;
+    if total > budget.max_items as usize {
+        return Err(FdtError::ResourceLimit);
+    }
+    let mut writes = Vec::with_capacity(total);
+    for entry in &plan.external {
+        let relative = usize::try_from(entry.property_offset)
+            .map_err(|_| FdtError::IntegerOverflow)?;
+        let start = entry.overlay_property_range.start.checked_add(relative)
+            .ok_or(FdtError::IntegerOverflow)?;
+        let end = start.checked_add(4).ok_or(FdtError::IntegerOverflow)?;
+        if end > entry.overlay_property_range.end || end > overlay_data.len() {
+            return Err(FdtError::InvalidFixup);
+        }
+        writes.push(FdtFixupWrite {
+            range: start..end,
+            value: entry.target_phandle,
+            kind: FdtFixupWriteKind::External,
+        });
+    }
+    for entry in &plan.local {
+        let relative = usize::try_from(entry.property_offset)
+            .map_err(|_| FdtError::IntegerOverflow)?;
+        let start = entry.overlay_property_range.start.checked_add(relative)
+            .ok_or(FdtError::IntegerOverflow)?;
+        let end = start.checked_add(4).ok_or(FdtError::IntegerOverflow)?;
+        if end > entry.overlay_property_range.end || end > overlay_data.len() {
+            return Err(FdtError::InvalidFixup);
+        }
+        writes.push(FdtFixupWrite {
+            range: start..end,
+            value: entry.relocated_phandle,
+            kind: FdtFixupWriteKind::Local,
+        });
+    }
+    writes.sort_unstable_by_key(|write| write.range.start);
+    for pair in writes.windows(2) {
+        if pair[0].range.end > pair[1].range.start {
+            return Err(FdtError::FixupWriteConflict);
+        }
+    }
+    Ok(FdtOverlayWriteSet { writes, output_size: overlay_data.len() })
+}
+
+/// Applies a previously validated write set to a fresh bounded copy.
+/// The source is never modified; callers receive either a complete output or an error.
+pub fn apply_overlay_fixup_write_set(
+    overlay_data: &[u8],
+    write_set: &FdtOverlayWriteSet,
+    budget: ParseBudget,
+) -> Result<Vec<u8>, FdtError> {
+    budget.check_input(u64::try_from(overlay_data.len()).map_err(|_| FdtError::IntegerOverflow)?)
+        .map_err(|_| FdtError::ResourceLimit)?;
+    if write_set.output_size != overlay_data.len()
+        || write_set.writes.len() > budget.max_items as usize
+    {
+        return Err(FdtError::InvalidFixup);
+    }
+    let mut previous_end = 0usize;
+    for write in &write_set.writes {
+        if write.range.start < previous_end || write.range.end > overlay_data.len()
+            || write.range.end.checked_sub(write.range.start) != Some(4)
+        {
+            return Err(FdtError::FixupWriteConflict);
+        }
+        previous_end = write.range.end;
+    }
+    // Allocate only after validating every write, preserving all-or-nothing semantics.
+    let mut output = overlay_data.to_vec();
+    for write in &write_set.writes {
+        output[write.range.clone()].copy_from_slice(&write.value.to_be_bytes());
+    }
+    Ok(output)
+}
+
+#[cfg(test)]
+mod fixup_write_tests {
+    use super::*;
+
+    fn budget() -> ParseBudget {
+        ParseBudget { max_input_bytes: 4096, max_items: 16, max_nesting_depth: 8 }
+    }
+
+    fn range(start: usize, len: usize) -> Range<usize> { start..start + len }
+
+    fn plan() -> FdtOverlayFixupPlan {
+        FdtOverlayFixupPlan {
+            external: vec![FdtExternalFixup {
+                symbol: "clk".to_owned(), target_node_path: "/soc".to_owned(),
+                target_phandle: 7, overlay_property: "clocks".to_owned(),
+                overlay_property_range: range(8, 8), property_offset: 0,
+            }],
+            local: vec![FdtLocalFixup {
+                overlay_node_path: "/fragment@0/dev".to_owned(),
+                overlay_property: "link".to_owned(),
+                overlay_property_range: range(16, 4), property_offset: 0,
+                original_phandle: 2, relocated_phandle: 102,
+            }],
+            base_max_phandle: 100, phandle_delta: 100,
+        }
+    }
+
+    #[test]
+    fn builds_sorted_write_set_and_applies_atomically_to_copy() {
+        let mut source = vec![0_u8; 24];
+        source[8..12].copy_from_slice(&2_u32.to_be_bytes());
+        source[16..20].copy_from_slice(&2_u32.to_be_bytes());
+        let writes = build_overlay_fixup_write_set(&source, &plan(), budget()).unwrap();
+        assert_eq!(writes.writes.len(), 2);
+        let output = apply_overlay_fixup_write_set(&source, &writes, budget()).unwrap();
+        assert_eq!(u32::from_be_bytes(output[8..12].try_into().unwrap()), 7);
+        assert_eq!(u32::from_be_bytes(output[16..20].try_into().unwrap()), 102);
+        assert_eq!(u32::from_be_bytes(source[8..12].try_into().unwrap()), 2);
+        assert_eq!(u32::from_be_bytes(source[16..20].try_into().unwrap()), 2);
+    }
+
+    #[test]
+    fn rejects_duplicate_or_overlapping_write_targets() {
+        let source = vec![0_u8; 24];
+        let mut conflicting = plan();
+        conflicting.local[0].overlay_property_range = range(8, 4);
+        assert_eq!(
+            build_overlay_fixup_write_set(&source, &conflicting, budget()),
+            Err(FdtError::FixupWriteConflict),
+        );
+    }
+
+    #[test]
+    fn rejects_out_of_range_writes_and_budget_excess() {
+        let source = vec![0_u8; 24];
+        let mut invalid = plan();
+        invalid.external[0].property_offset = 8;
+        assert_eq!(
+            build_overlay_fixup_write_set(&source, &invalid, budget()),
+            Err(FdtError::InvalidFixup),
+        );
+        let mut small = budget();
+        small.max_items = 1;
+        assert_eq!(
+            build_overlay_fixup_write_set(&source, &plan(), small),
+            Err(FdtError::ResourceLimit),
+        );
+    }
+
+    #[test]
+    fn rejects_forged_write_set_before_allocating_output() {
+        let source = vec![0_u8; 24];
+        let forged = FdtOverlayWriteSet {
+            writes: vec![FdtFixupWrite {
+                range: 20..25, value: 9, kind: FdtFixupWriteKind::External,
+            }],
+            output_size: 24,
+        };
+        assert_eq!(
+            apply_overlay_fixup_write_set(&source, &forged, budget()),
+            Err(FdtError::FixupWriteConflict),
         );
     }
 }
