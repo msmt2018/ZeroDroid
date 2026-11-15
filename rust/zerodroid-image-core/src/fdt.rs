@@ -1237,3 +1237,265 @@ mod fixup_write_tests {
         );
     }
 }
+
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FdtOwnedProperty {
+    pub name: String,
+    pub value: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FdtOwnedNode {
+    pub name: String,
+    pub path: String,
+    pub parent: Option<usize>,
+    pub properties: Vec<FdtOwnedProperty>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FdtMergedTree {
+    pub reservations: Vec<FdtReservation>,
+    pub nodes: Vec<FdtOwnedNode>,
+    pub root_compatible: Vec<String>,
+    pub model: Option<String>,
+}
+
+/// Materializes a bounded, owned tree and applies the already-resolved fragment
+/// subtrees in fragment order. This is the merge stage only: serialization into a
+/// new DTB and symbol export rewriting are deliberately separate operations.
+pub fn merge_overlay_fragments(
+    base_data: &[u8],
+    base: &FdtIndex,
+    overlay_data: &[u8],
+    overlay: &FdtIndex,
+    resolutions: &[FdtOverlayResolution],
+    budget: ParseBudget,
+) -> Result<FdtMergedTree, FdtError> {
+    budget.check_input(u64::try_from(base_data.len()).map_err(|_| FdtError::IntegerOverflow)?)
+        .map_err(|_| FdtError::ResourceLimit)?;
+    budget.check_input(u64::try_from(overlay_data.len()).map_err(|_| FdtError::IntegerOverflow)?)
+        .map_err(|_| FdtError::ResourceLimit)?;
+    if base.nodes.is_empty() || overlay.nodes.is_empty()
+        || base.nodes.len().checked_add(overlay.nodes.len()).ok_or(FdtError::IntegerOverflow)?
+            > budget.max_items as usize
+    {
+        return Err(FdtError::ResourceLimit);
+    }
+
+    let mut nodes = Vec::with_capacity(base.nodes.len().min(budget.max_items as usize));
+    let mut copied_bytes = 0usize;
+    for source in &base.nodes {
+        let parent = source.parent;
+        let mut properties = Vec::with_capacity(source.properties.len());
+        for property in &source.properties {
+            let value = base_data.get(property.value.clone()).ok_or(FdtError::InvalidRange)?;
+            copied_bytes = copied_bytes.checked_add(value.len()).ok_or(FdtError::IntegerOverflow)?;
+            if copied_bytes > budget.max_input_bytes as usize {
+                return Err(FdtError::ResourceLimit);
+            }
+            properties.push(FdtOwnedProperty { name: property.name.clone(), value: value.to_vec() });
+        }
+        nodes.push(FdtOwnedNode {
+            name: source.name.clone(),
+            path: source.path.clone(),
+            parent,
+            properties,
+        });
+    }
+
+    // Validate the base index topology before using parent indices as array offsets.
+    if nodes[0].path != "/" || nodes[0].parent.is_some() {
+        return Err(FdtError::InvalidStructure);
+    }
+    for (index, node) in nodes.iter().enumerate().skip(1) {
+        let parent = node.parent.ok_or(FdtError::InvalidStructure)?;
+        if parent >= index || parent >= nodes.len() {
+            return Err(FdtError::InvalidStructure);
+        }
+        let expected = if nodes[parent].path == "/" {
+            format!("/{}", node.name)
+        } else {
+            format!("{}/{}", nodes[parent].path, node.name)
+        };
+        if expected != node.path {
+            return Err(FdtError::InvalidStructure);
+        }
+        if nodes[..index].iter().any(|prior| prior.parent == Some(parent) && prior.name == node.name) {
+            return Err(FdtError::InvalidStructure);
+        }
+    }
+
+    let mut item_count = nodes.len();
+    for resolution in resolutions {
+        let fragment_index = overlay.nodes.iter().position(|node| node.path == resolution.fragment_path)
+            .ok_or(FdtError::MissingOverlayTarget)?;
+        let target_index = nodes.iter().position(|node| node.path == resolution.target_node_path)
+            .ok_or(FdtError::MissingOverlayTarget)?;
+        let subtree_index = overlay.nodes.iter().position(|node| {
+            node.parent == Some(fragment_index) && node.name == "__overlay__"
+        }).ok_or(FdtError::MissingOverlaySubtree)?;
+
+        merge_one_overlay_node(
+            base_data,
+            overlay_data,
+            overlay,
+            subtree_index,
+            &mut nodes,
+            target_index,
+            &mut item_count,
+            &mut copied_bytes,
+            budget,
+        )?;
+    }
+
+    // A merged tree must not contain duplicate or reserved phandle values.
+    let mut phandles = Vec::new();
+    for node in &nodes {
+        let mut value = None;
+        for property in &node.properties {
+            if property.name == "phandle" || property.name == "linux,phandle" {
+                if property.value.len() != 4 { return Err(FdtError::InvalidPhandle); }
+                let current = u32::from_be_bytes([
+                    property.value[0], property.value[1], property.value[2], property.value[3],
+                ]);
+                if current == 0 || current == u32::MAX
+                    || value.is_some_and(|previous| previous != current)
+                {
+                    return Err(FdtError::InvalidPhandle);
+                }
+                value = Some(current);
+            }
+        }
+        if let Some(value) = value { phandles.push(value); }
+    }
+    phandles.sort_unstable();
+    if phandles.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(FdtError::DuplicatePhandle);
+    }
+
+    let root = nodes.first().ok_or(FdtError::InvalidStructure)?;
+    let compatible = root.properties.iter().find(|p| p.name == "compatible")
+        .map(|p| string_list(&p.value)).transpose()?.unwrap_or_default();
+    let model = root.properties.iter().find(|p| p.name == "model")
+        .map(|p| {
+            let value = c_string(&p.value)?;
+            if value.len() + 1 != p.value.len() { return Err(FdtError::InvalidStructure); }
+            Ok(value.to_owned())
+        }).transpose()?;
+
+    Ok(FdtMergedTree {
+        reservations: base.reservations.clone(),
+        nodes,
+        root_compatible: compatible,
+        model,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn merge_one_overlay_node(
+    _base_data: &[u8],
+    overlay_data: &[u8],
+    overlay: &FdtIndex,
+    source_index: usize,
+    destination: &mut Vec<FdtOwnedNode>,
+    destination_index: usize,
+    item_count: &mut usize,
+    copied_bytes: &mut usize,
+    budget: ParseBudget,
+) -> Result<(), FdtError> {
+    let source = overlay.nodes.get(source_index).ok_or(FdtError::InvalidStructure)?;
+    for property in &source.properties {
+        let value = overlay_data.get(property.value.clone()).ok_or(FdtError::InvalidRange)?;
+        let existing = destination[destination_index].properties.iter()
+            .position(|candidate| candidate.name == property.name);
+        if let Some(property_index) = existing {
+            *copied_bytes = copied_bytes.checked_add(value.len()).ok_or(FdtError::IntegerOverflow)?;
+            if *copied_bytes > budget.max_input_bytes as usize { return Err(FdtError::ResourceLimit); }
+            destination[destination_index].properties[property_index].value = value.to_vec();
+        } else {
+            *item_count = item_count.checked_add(1).ok_or(FdtError::IntegerOverflow)?;
+            *copied_bytes = copied_bytes.checked_add(value.len()).ok_or(FdtError::IntegerOverflow)?;
+            if *item_count > budget.max_items as usize
+                || *copied_bytes > budget.max_input_bytes as usize
+            {
+                return Err(FdtError::ResourceLimit);
+            }
+            destination[destination_index].properties.push(FdtOwnedProperty {
+                name: property.name.clone(),
+                value: value.to_vec(),
+            });
+        }
+    }
+
+    for (child_index, child) in overlay.nodes.iter().enumerate()
+        .filter(|(_, node)| node.parent == Some(source_index))
+    {
+        let existing_child = destination.iter().position(|candidate| {
+            candidate.parent == Some(destination_index) && candidate.name == child.name
+        });
+        if let Some(existing_index) = existing_child {
+            merge_one_overlay_node(
+                _base_data, overlay_data, overlay, child_index, destination,
+                existing_index, item_count, copied_bytes, budget,
+            )?;
+        } else {
+            clone_overlay_subtree(
+                overlay_data, overlay, child_index, destination, destination_index,
+                item_count, copied_bytes, budget,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn clone_overlay_subtree(
+    overlay_data: &[u8],
+    overlay: &FdtIndex,
+    source_index: usize,
+    destination: &mut Vec<FdtOwnedNode>,
+    parent_index: usize,
+    item_count: &mut usize,
+    copied_bytes: &mut usize,
+    budget: ParseBudget,
+) -> Result<usize, FdtError> {
+    let source = overlay.nodes.get(source_index).ok_or(FdtError::InvalidStructure)?;
+    *item_count = item_count.checked_add(1).ok_or(FdtError::IntegerOverflow)?;
+    if *item_count > budget.max_items as usize { return Err(FdtError::ResourceLimit); }
+    let path = if destination[parent_index].path == "/" {
+        format!("/{}", source.name)
+    } else {
+        format!("{}/{}", destination[parent_index].path, source.name)
+    };
+    if destination.iter().any(|node| node.parent == Some(parent_index) && node.name == source.name) {
+        return Err(FdtError::InvalidStructure);
+    }
+    let mut properties = Vec::with_capacity(source.properties.len());
+    for property in &source.properties {
+        let value = overlay_data.get(property.value.clone()).ok_or(FdtError::InvalidRange)?;
+        *item_count = item_count.checked_add(1).ok_or(FdtError::IntegerOverflow)?;
+        *copied_bytes = copied_bytes.checked_add(value.len()).ok_or(FdtError::IntegerOverflow)?;
+        if *item_count > budget.max_items as usize
+            || *copied_bytes > budget.max_input_bytes as usize
+        {
+            return Err(FdtError::ResourceLimit);
+        }
+        properties.push(FdtOwnedProperty { name: property.name.clone(), value: value.to_vec() });
+    }
+    let index = destination.len();
+    destination.push(FdtOwnedNode {
+        name: source.name.clone(),
+        path,
+        parent: Some(parent_index),
+        properties,
+    });
+    for (child_index, _) in overlay.nodes.iter().enumerate()
+        .filter(|(_, node)| node.parent == Some(source_index))
+    {
+        clone_overlay_subtree(
+            overlay_data, overlay, child_index, destination, index,
+            item_count, copied_bytes, budget,
+        )?;
+    }
+    Ok(index)
+}
