@@ -326,7 +326,7 @@ mod tests {
     fn rejects_duplicate_unique_partition_guids() {
         let mut disk = valid_disk();
         let second = 2 * 512 + 128;
-        disk[second..second + 16].copy_from_slice(&disk[2 * 512 + 16..2 * 512 + 32].to_vec());
+        let duplicate_guid = disk[2 * 512 + 16..2 * 512 + 32].to_vec();\n        disk[second..second + 16].copy_from_slice(&duplicate_guid);
         disk[second + 32..second + 40].copy_from_slice(&60_u64.to_le_bytes());
         disk[second + 40..second + 48].copy_from_slice(&69_u64.to_le_bytes());
         put_u32(&mut disk, 512 + 80, 2);
