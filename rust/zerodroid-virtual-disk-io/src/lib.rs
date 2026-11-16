@@ -223,7 +223,8 @@ mod tests {
         let mut read = vec![0; 8 * 512];
         adapter.read_at(VmId(9), 3, 6 * 512, &mut read).unwrap();
         assert_eq!(&read[..2 * 512], &vec![0x11; 2 * 512]);
-        assert_eq!(&read[2 * 512..], &vec![0; 6 * 512]);
+        assert_eq!(&read[2 * 512..6 * 512], &vec![0; 4 * 512]);
+        assert_eq!(&read[6 * 512..], &vec![0x11; 2 * 512]);
         adapter.write_at(VmId(9), 3, 8 * 512, &[0x5a; 4 * 512]).unwrap();
         let mut zero_read = vec![0; 4 * 512];
         adapter.read_at(VmId(9), 3, 8 * 512, &mut zero_read).unwrap();
