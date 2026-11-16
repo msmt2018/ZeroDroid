@@ -16,6 +16,7 @@ pub enum FastbootError {
     InvalidNumber,
     DownloadTooLarge,
     DownloadNotActive,
+    DownloadAlreadyActive,
     DownloadIncomplete,
     DownloadOverflow,
     UnknownPartition,
@@ -264,6 +265,9 @@ impl FastbootSession {
         match parse_command(input)? {
             FastbootCommand::GetVar(name) => self.getvar(name),
             FastbootCommand::Download { size } => {
+                if self.download.is_some() {
+                    return Err(FastbootError::DownloadAlreadyActive);
+                }
                 if size == 0 || size > self.policy.max_download_bytes {
                     return Err(FastbootError::DownloadTooLarge);
                 }
@@ -415,6 +419,16 @@ mod tests {
         assert_eq!(vm.handle(b"flash:boot_a"), Ok(FastbootAction::Flash(FlashPlan {
             partition: "boot_a".to_owned(), download_id, image_size_bytes: 4,
         })));
+    }
+
+    #[test]
+    fn rejects_overlapping_download_sessions_and_replayed_write_confirmations() {
+        let mut vm = session();
+        vm.handle(b"download:00000002").unwrap();
+        assert_eq!(vm.handle(b"download:00000002"), Err(FastbootError::DownloadAlreadyActive));
+        let write = vm.prepare_download_write(1).unwrap();
+        assert_eq!(vm.confirm_download_write(write), Ok(1));
+        assert_eq!(vm.confirm_download_write(write), Err(FastbootError::DownloadOverflow));
     }
 
     #[test]
