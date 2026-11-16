@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 
 add_library(zerodroid_vm_core STATIC
     src/vm.cpp
+    src/guest_memory_layout.cpp
 )
 target_include_directories(zerodroid_vm_core
     PUBLIC
@@ -19,4 +20,9 @@ if(ZERODROID_BUILD_TESTS AND NOT ANDROID)
     target_link_libraries(zerodroid_vm_core_tests PRIVATE zerodroid_vm_core)
     target_compile_features(zerodroid_vm_core_tests PRIVATE cxx_std_20)
     add_test(NAME zerodroid_vm_core_tests COMMAND zerodroid_vm_core_tests)
+
+    add_executable(zerodroid_guest_memory_layout_tests tests/guest_memory_layout_tests.cpp)
+    target_link_libraries(zerodroid_guest_memory_layout_tests PRIVATE zerodroid_vm_core)
+    target_compile_features(zerodroid_guest_memory_layout_tests PRIVATE cxx_std_20)
+    add_test(NAME zerodroid_guest_memory_layout_tests COMMAND zerodroid_guest_memory_layout_tests)
 endif()
