@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod avb;
+pub mod legacy_boot;
 pub mod fdt;
 pub mod partition_catalog;
 
