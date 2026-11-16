@@ -30,5 +30,8 @@ data class NativeHostCapabilities(
     val kvmState: KvmProbeState,
     val kvmApiVersion: Int,
     /** errno captured at the failed open/ioctl call, or zero when not applicable. */
-    val kvmErrno: Int
+    val kvmErrno: Int,
+    /** Temporary KVM_CREATE_VM followed by immediate close; not a guest boot result. */
+    val vmCreateState: KvmProbeState,
+    val vmCreateErrno: Int
 )
