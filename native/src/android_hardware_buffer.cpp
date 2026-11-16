@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <utility>
 #include <unordered_map>
 
 namespace {
@@ -157,12 +158,24 @@ Java_dev_zerodroid_core_nativebridge_NativeRuntime_nativeAllocateHardwareBuffer(
             throw_state(env, "AHardwareBuffer registry allocation failed");
             return nullptr;
         } catch (...) {
-            throw_state(env, "Unexpected AH​​ardwareBuffer registry failure");
+            throw_state(env, "Unexpected AHardwareBuffer registry failure");
             return nullptr;
         }
     }
-    // JNI array allocation is intentionally outside the registry lock.
-    jlongArray result = describe(env, handle, g_buffers.at(handle).buffer.get());
+    // Take a temporary reference while the registry is locked. Describe/JNI
+    // allocation then runs without holding the registry mutex.
+    HardwareBufferPtr retained;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        const auto found = g_buffers.find(handle);
+        if (found == g_buffers.end()) {
+            throw_state(env, "Newly registered HardwareBuffer disappeared");
+            return nullptr;
+        }
+        AHardwareBuffer_acquire(found->second.buffer.get());
+        retained.reset(found->second.buffer.get());
+    }
+    jlongArray result = describe(env, handle, retained.get());
     if (result == nullptr) {
         std::lock_guard<std::mutex> lock(g_mutex);
         const auto found = g_buffers.find(handle);
