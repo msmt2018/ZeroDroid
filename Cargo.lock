@@ -11,6 +11,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "zerodroid-guest-memory"
+version = "0.1.0"
+dependencies = [
+ "zerodroid-vm-spec-core",
+]
+
+[[package]]
 name = "zerodroid-image-core"
 version = "0.1.0"
 
