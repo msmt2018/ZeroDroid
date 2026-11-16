@@ -1,6 +1,7 @@
 #include <jni.h>
 
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <fcntl.h>
 #include <limits>
@@ -77,14 +78,24 @@ int wait_fence_fd(int fd, int timeout_ms) noexcept {
     pollfd descriptor{};
     descriptor.fd = fd;
     descriptor.events = POLLIN;
-    int result;
-    do {
-        result = ::poll(&descriptor, 1, timeout_ms);
-    } while (result < 0 && errno == EINTR);
-    if (result == 0) return 0;
-    if (result < 0) return -1;
-    if ((descriptor.revents & POLLIN) != 0) return 1;
-    return -1;
+    const auto deadline = std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(timeout_ms);
+    int remaining = timeout_ms;
+    for (;;) {
+        const int result = ::poll(&descriptor, 1, remaining);
+        if (result == 0) return 0;
+        if (result < 0 && errno == EINTR) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= deadline) return 0;
+            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - now).count();
+            remaining = static_cast<int>(left > 0 ? left : 0);
+            continue;
+        }
+        if (result < 0) return -1;
+        if ((descriptor.revents & POLLIN) != 0) return 1;
+        return -1;
+    }
 }
 } // namespace
 
