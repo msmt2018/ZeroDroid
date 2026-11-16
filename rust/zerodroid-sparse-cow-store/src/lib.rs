@@ -16,7 +16,7 @@ pub struct ObjectId(pub u128);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {
     InvalidName, InvalidCapacity, QuotaExceeded, ObjectNotFound,
-    StaleGeneration, TooManyPages, IntegerOverflow, BackendFailure,
+    StaleGeneration, TooManyPages, TooManyObjects, IntegerOverflow, BackendFailure,
 }
 impl From<StoreError> for BlockError {
     fn from(_: StoreError) -> Self { BlockError::BackendFailure }
@@ -79,7 +79,7 @@ impl<B: SparseCowBackend> SparseCowStore<B> {
         let key = (vm.0, name.to_owned());
         if self.objects.contains_key(&key) { return Err(StoreError::InvalidName); }
         if self.objects.keys().filter(|(owner, _)| *owner == vm.0).count() >= HARD_MAX_OBJECTS_PER_VM {
-            return Err(StoreError::TooManyPages);
+            return Err(StoreError::TooManyObjects);
         }
         let id = ObjectId(self.next_object_id);
         self.next_object_id = self.next_object_id.checked_add(1).ok_or(StoreError::IntegerOverflow)?;
@@ -288,7 +288,7 @@ mod tests {
         for i in 0..HARD_MAX_OBJECTS_PER_VM {
             s.create_object(VmId(9), 1, &format!("obj{i}"), PAGE_SIZE as u64).unwrap();
         }
-        assert_eq!(s.create_object(VmId(9), 1, "overflow", PAGE_SIZE as u64), Err(StoreError::TooManyPages));
+        assert_eq!(s.create_object(VmId(9), 1, "overflow", PAGE_SIZE as u64), Err(StoreError::TooManyObjects));
     }
     #[test]
     fn flush_is_forwarded() {
