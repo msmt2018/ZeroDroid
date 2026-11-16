@@ -2,10 +2,12 @@ import org.gradle.api.tasks.Exec
 
 plugins { alias(libs.plugins.android.library) }
 
+val zerodroidNdkVersion = "30.0.16248370"
+
 android {
     namespace = "dev.zerodroid.core.nativebridge"
     compileSdk = 37
-    ndkVersion = "30.0.16248370"
+    ndkVersion = zerodroidNdkVersion
 
     defaultConfig {
         minSdk = 28
@@ -30,7 +32,18 @@ val ndkHostTag = when {
     hostOs.contains("win") -> "windows-x86_64"
     else -> "linux-x86_64"
 }
-val ndkToolchainBin = File(android.ndkDirectory, "toolchains/llvm/prebuilt/$ndkHostTag/bin")
+val localSdkProperties = java.util.Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.isFile) {
+        localPropertiesFile.inputStream().use { load(it) }
+    }
+}
+val androidSdkPath = System.getenv("ANDROID_SDK_ROOT")
+    ?: System.getenv("ANDROID_HOME")
+    ?: localSdkProperties.getProperty("sdk.dir")
+    ?: error("Set ANDROID_SDK_ROOT/ANDROID_HOME or sdk.dir in local.properties")
+val ndkRoot = File(androidSdkPath, "ndk/$zerodroidNdkVersion")
+val ndkToolchainBin = File(ndkRoot, "toolchains/llvm/prebuilt/$ndkHostTag/bin")
 val rustLinker = File(ndkToolchainBin, "aarch64-linux-android28-clang")
 
 val installRustAndroidTarget by tasks.registering(Exec::class) {
