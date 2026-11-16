@@ -63,3 +63,4 @@
 - 所有能力必须区分设计目标、代码实现、构建通过、模拟环境验证和真机验证。
 49. [Native VM 核心与源码集成基础](49-native-vm-core-and-source-integration.md)
 50. [AEmulator 技术研究到 ZeroDroid 独立实现的映射](50-aemulator-independent-research-mapping.md)
+51. [Rust FFI 与 Android Native 核心集成](51-rust-ffi-and-android-native-integration.md)
