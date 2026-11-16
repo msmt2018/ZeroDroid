@@ -57,6 +57,9 @@ class HostCapabilityDiscovery(
             if (error is CancellationException) throw error
             failures += CapabilityProbeFailure("architecture", error::class.java.simpleName)
             HostArchitecture.UNKNOWN
+        } catch (error: LinkageError) {
+            failures += CapabilityProbeFailure("architecture", error::class.java.simpleName)
+            HostArchitecture.UNKNOWN
         }
         val avf = try {
             avfProbe.probe()
@@ -68,11 +71,27 @@ class HostCapabilityDiscovery(
                 serviceAvailable = CapabilityFact.ERROR,
                 appAuthorized = CapabilityFact.ERROR
             )
+        } catch (error: LinkageError) {
+            failures += CapabilityProbeFailure("avf", error::class.java.simpleName)
+            AvfHostEvidence(
+                apiAvailable = CapabilityFact.ERROR,
+                serviceAvailable = CapabilityFact.ERROR,
+                appAuthorized = CapabilityFact.ERROR
+            )
         }
         val kvm = try {
             kvmProbe.probe()
         } catch (error: Exception) {
             if (error is CancellationException) throw error
+            failures += CapabilityProbeFailure("kvm", error::class.java.simpleName)
+            KvmHostEvidence(
+                deviceApi = CapabilityFact.ERROR,
+                vmCreationAuthorized = CapabilityFact.ERROR,
+                el2Available = CapabilityFact.ERROR,
+                stage2Available = CapabilityFact.ERROR,
+                armGicAvailable = CapabilityFact.ERROR
+            )
+        } catch (error: LinkageError) {
             failures += CapabilityProbeFailure("kvm", error::class.java.simpleName)
             KvmHostEvidence(
                 deviceApi = CapabilityFact.ERROR,
