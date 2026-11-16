@@ -44,7 +44,7 @@ pub enum SpecError {
     InvalidVcpuCount,
     InvalidMemorySize,
     InvalidPageSize,
-    TooManyMemoryRegions,
+    InvalidMemoryRegionCount,
     EmptyMemoryRegion,
     UnalignedMemoryRegion,
     AddressOverflow,
@@ -70,7 +70,7 @@ impl GuestMachineSpec {
         if self.memory_regions.is_empty()
             || self.memory_regions.len() > HARD_MAX_MEMORY_REGIONS
         {
-            return Err(SpecError::TooManyMemoryRegions);
+            return Err(SpecError::InvalidMemoryRegionCount);
         }
 
         let mut total_ram = 0_u64;
@@ -140,6 +140,13 @@ mod tests {
     #[test]
     fn accepts_bounded_aligned_arm64_guest_layout() {
         assert_eq!(valid_spec().validate(), Ok(()));
+    }
+
+    #[test]
+    fn rejects_empty_memory_region_list() {
+        let mut spec = valid_spec();
+        spec.memory_regions.clear();
+        assert_eq!(spec.validate(), Err(SpecError::InvalidMemoryRegionCount));
     }
 
     #[test]
