@@ -10,7 +10,7 @@ It does not export a Java `HardwareBuffer`, import into EGL/Vulkan, lock CPU pix
 
 - Initial supported pixel format is `AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM` (RGBA8 UNORM), one layer.
 - Width and height are each in 1..8192.
-- The requested usage must include both GPU sampled-image and GPU color-output flags. Only those GPU flags and the explicitly enumerated CPU read/write flags are accepted.
+- The requested usage must include at least one of the GPU sampled-image or GPU color-output flags; requesting both is supported but not mandatory. Only those GPU flags and the explicitly enumerated CPU read/write flags are accepted.
 - The allocator's returned width, height, layer count, format and usage are checked before publication.
 - Actual stride is read from `AHardwareBuffer_describe`; byte accounting uses `stride × height × 4`, with checked multiplication.
 - Maximum estimated allocation is 64 MiB per buffer, 64 live buffers and 256 MiB total accounted buffer storage per process.
