@@ -1,0 +1,12 @@
+[package]
+name = "zerodroid-disk-layout-core"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Validated Guest GPT disk and partition address mapping"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+zerodroid-image-core = { path = "../zerodroid-image-core" }
