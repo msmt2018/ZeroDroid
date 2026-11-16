@@ -58,6 +58,7 @@
 50. [Guest Virtual Disk I/O Adapter](50-guest-virtual-disk-io-adapter.md)
 51. [Guest Sparse COW Storage Core](51-guest-sparse-cow-storage-core.md)
 52. [Guest Storage Journal and Recovery Codec](52-guest-storage-journal-and-recovery-codec.md)
+53. [Guest Storage Mutation Schema](53-guest-storage-mutation-schema.md)
 
 ## 设计基线
 
