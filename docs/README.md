@@ -57,6 +57,7 @@
 49. [Guest Dynamic Partition 运行时映射](49-guest-dynamic-partition-runtime.md)
 50. [Guest Virtual Disk I/O Adapter](50-guest-virtual-disk-io-adapter.md)
 51. [Guest Sparse COW Storage Core](51-guest-sparse-cow-storage-core.md)
+52. [Guest Storage Journal and Recovery Codec](52-guest-storage-journal-and-recovery-codec.md)
 
 ## 设计基线
 
