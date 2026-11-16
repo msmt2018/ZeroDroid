@@ -59,6 +59,10 @@ pub struct LegacyBootImageIndex {
     pub total_indexed_bytes: u64,
 }
 
+fn second_range_end(second_size: u32, second_end: u64, ramdisk_end: u64) -> u64 {
+    if second_size == 0 { ramdisk_end } else { second_end }
+}
+
 /// Parses legacy boot.img v0-v2 framing and indexes its payloads without copying.
 pub fn parse_legacy_boot_image(
     data: &[u8],
@@ -171,11 +175,12 @@ pub fn parse_legacy_boot_image(
         None
     };
 
+    let payload_end = second_range_end(second_size, second_end, ramdisk_end);
     let total_end = dtb_range
         .as_ref()
         .map(|range| range.end as u64)
         .or_else(|| recovery_range.as_ref().map(|range| range.end as u64))
-        .unwrap_or(second_end)
+        .unwrap_or(payload_end)
         .max(ramdisk_end)
         .max(kernel_end);
     if total_end > u64::try_from(data.len()).map_err(|_| ParseError::IntegerOverflow)? {
