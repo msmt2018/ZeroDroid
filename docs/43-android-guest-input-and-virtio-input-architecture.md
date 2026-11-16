@@ -23,7 +23,7 @@ The rust-uinput-sys repository is an external reference for ioctl and Linux inpu
 1. Android UI adapter receives MotionEvent/KeyEvent through public Android APIs.
 2. Adapter translates display/surface coordinates into a defined logical coordinate space and maps Android key codes to Linux input key codes.
 3. zerodroid-input-core validates samples, clamps coordinates to the Guest axis range, tracks Android pointer IDs independently from Guest multitouch slots and emits event frames.
-4. A bounded VMM input queue accepts frames with explicit backpressure and lifecycle cancellation.
+4. A bounded frame-atomic input queue accepts complete frames with explicit backpressure and lifecycle cancellation.
 5. VirtIO Input transport serializes the 8-byte little-endian virtio_input_event records into Guest-provided descriptor chains.
 6. VMM signals the configured virtual interrupt only after queue writes are committed.
 7. Guest Linux input driver exposes the device to the Guest input subsystem.
@@ -75,11 +75,12 @@ Implemented:
 - per-contact release and cancellation;
 - Linux key-event frame helper;
 - exact little-endian VirtIO input event encoding;
+- bounded frame-atomic queue with capacity, malformed-frame rejection, backpressure and close semantics;
 - unit tests for the above.
 
 Not implemented:
 - Android MotionEvent/KeyEvent adapter and keycode mapping;
-- bounded async input queue/backpressure;
+- asynchronous adapter-to-VMM scheduling and queue wakeup integration (the current bounded queue is synchronous and transport-neutral);
 - VirtIO Input device config/feature negotiation and descriptor queue;
 - virtual interrupt delivery and reset;
 - Guest DTB/manifest wiring;
