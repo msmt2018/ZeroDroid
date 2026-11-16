@@ -141,7 +141,7 @@ impl<B: VirtualDiskExtentBackend> BlockBackend for MappedPartitionBackend<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zerodroid_dynamic_partition_core::{DynamicPartitionLayout, DynamicPartition};
+    use zerodroid_dynamic_partition_core::DynamicPartitionLayout;
     use zerodroid_image_core::lp_metadata::{
         LpBlockDevice, LpExtent, LpGeometry, LpGroup, LpMetadataIndex, LpPartition,
         LP_TARGET_LINEAR, LP_TARGET_ZERO,
@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn routes_cross_extent_reads_and_writes_including_zero_cow_overlay() {
         let p = partition();
-        let mut backend = MemoryExtentBackend { generation: 3, linear: vec![0x11; 128 * 1024], zero: vec![0; 24 * 512], ..Default::default() };
+        let backend = MemoryExtentBackend { generation: 3, linear: vec![0x11; 128 * 1024], zero: vec![0; 24 * 512], ..Default::default() };
         let mut adapter = MappedPartitionBackend::new(backend, VmId(9), 3, "system_a", &p, 8).unwrap();
         let mut read = vec![0; 8 * 512];
         adapter.read_at(VmId(9), 3, 6 * 512, &mut read).unwrap();
