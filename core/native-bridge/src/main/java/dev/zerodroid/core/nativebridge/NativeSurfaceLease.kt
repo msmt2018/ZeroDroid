@@ -1,7 +1,5 @@
 package dev.zerodroid.core.nativebridge
 
-import java.util.concurrent.atomic.AtomicBoolean
-
 /** Current dimensions and Android pixel-format identifier reported by ANativeWindow. */
 data class NativeSurfaceMetrics(
     val leaseHandle: Long,
@@ -26,15 +24,18 @@ class NativeSurfaceLease internal constructor(
     private val handle: Long,
     val initialMetrics: NativeSurfaceMetrics
 ) : AutoCloseable {
-    private val closed = AtomicBoolean(false)
+    private var closed = false
 
+    @Synchronized
     fun queryMetrics(): NativeSurfaceMetrics {
-        check(!closed.get()) { "Surface lease is already closed" }
+        check(!closed) { "Surface lease is already closed" }
         return NativeRuntime.querySurface(handle)
     }
 
+    @Synchronized
     override fun close() {
-        if (closed.compareAndSet(false, true)) {
+        if (!closed) {
+            closed = true
             NativeRuntime.releaseSurface(handle)
         }
     }
