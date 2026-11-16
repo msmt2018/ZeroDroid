@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "purpose": "Select and audit the ARM64 hardware-virtualization VMM source set for ZeroDroid; this is not a declaration that the upstream tree has been downloaded or integrated.",
+  "primary_upstream": {
+    "repository": "https://github.com/google/crosvm",
+    "revision": "9b63ea5f62f1493b5d2bb1c0da54f090d5e25ebe",
+    "checkout_path": "third_party/aosp/external/crosvm-upstream",
+    "manifest_project": "google/crosvm",
+    "license": "BSD-3-Clause",
+    "role": "VMM implementation candidate; not a CPU emulator and not the hardware hypervisor."
+  },
+  "aosp_comparison": {
+    "repository": "https://android.googlesource.com/platform/external/crosvm",
+    "checkout_path": "third_party/aosp/external/crosvm-aosp",
+    "manifest_project": "platform/external/crosvm",
+    "role": "Android release integration comparison only; not an independently selected production source until version and patch audit."
+  },
+  "selected_components": [
+    {
+      "crate": "hypervisor",
+      "role": "KVM userspace API, VM/vCPU lifecycle and ARM64 register interfaces"
+    },
+    {
+      "crate": "kvm_sys",
+      "role": "Linux KVM UAPI bindings"
+    },
+    {
+      "crate": "vm_memory",
+      "role": "Guest physical address space, memory backing and guest range validation"
+    },
+    {
+      "crate": "aarch64",
+      "role": "ARM64-specific VM and device-tree support"
+    },
+    {
+      "crate": "arch",
+      "role": "Architecture boot and platform integration"
+    },
+    {
+      "crate": "kernel_loader",
+      "role": "Guest kernel and initramfs loading primitives"
+    },
+    {
+      "crate": "cros_fdt",
+      "role": "Flattened Device Tree construction and serialization"
+    },
+    {
+      "crate": "devices",
+      "role": "Virtual interrupt-controller integration and generic device framework"
+    },
+    {
+      "crate": "device_virtio_block",
+      "role": "VirtIO block device candidate"
+    },
+    {
+      "crate": "device_virtio_console",
+      "role": "VirtIO console device candidate"
+    },
+    {
+      "crate": "device_virtio_net",
+      "role": "VirtIO network device candidate"
+    },
+    {
+      "crate": "device_virtio_vsock",
+      "role": "VirtIO vsock device candidate"
+    },
+    {
+      "crate": "device_virtio_rng",
+      "role": "VirtIO entropy device candidate"
+    }
+  ],
+  "excluded_from_initial_android_vm": {
+    "crates": [
+      "gpu_display",
+      "android_audio",
+      "device_virtio_snd",
+      "device_virtio_fs",
+      "device_virtio_9p",
+      "device_virtio_tpm"
+    ],
+    "reason": "Require separate Android permission, Bionic, host device, SELinux and performance audits; do not pull into the first boot path by default."
+  },
+  "integration_gates": [
+    "Check out the exact pinned revision and preserve upstream LICENSE and notices.",
+    "Build selected crates for aarch64-linux-android using the installed NDK toolchain.",
+    "Audit libc, ioctl, mmap, eventfd, memfd/shared-memory, epoll, seccomp, namespaces and Android SELinux assumptions.",
+    "Confirm /dev/kvm or AVF permission model on target Android devices; do not treat an open KVM fd as proof of vCPU/GIC/boot support.",
+    "Validate ARM VM IPA size, vCPU target/features, PSCI, VGICv2/v3, timer and interrupt routing.",
+    "Validate Guest memory registration, stage-2 mapping, DTB construction and kernel boot register setup.",
+    "Integrate VirtIO-MMIO transport and block/console devices only after Guest Kernel driver compatibility is confirmed.",
+    "Keep crosvm upstream code in its separate revision-locked checkout; ZeroDroid-owned adapters live in rust/zerodroid-vmm and cpp/."
+  ],
+  "production_status": "not_integrated",
+  "emulator_source_policy": {
+    "forbidden": [
+      "QEMU",
+      "TCG",
+      "Android Emulator",
+      "AEMU",
+      "Goldfish emulator devices",
+      "Cuttlefish emulator runtime"
+    ],
+    "aemulator": "research-only; no source, binary, generated artifact or runtime dependency may be imported"
+  }
+}

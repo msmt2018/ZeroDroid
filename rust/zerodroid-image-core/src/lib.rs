@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
 pub mod avb;
+pub mod bootconfig;
+pub mod arm64_kernel;
+pub mod legacy_boot;
 pub mod fdt;
 pub mod partition_catalog;
 
@@ -40,10 +43,69 @@ fn crc32_update(mut crc:u32, bytes:&[u8])->u32{
  for &byte in bytes{let index=((crc^u32::from(byte))&0xff) as usize;crc=(crc>>8)^CRC32_TABLE[index];}
  crc
 }
-fn crc32_repeat(mut crc:u32, pattern:&[u8], count:u64)->u32{
- if pattern.is_empty(){return crc}
- for i in 0..count{crc=crc32_update(crc,&pattern[(i as usize)%pattern.len()..(i as usize)%pattern.len()+1]);}
- crc
+fn gf2_matrix_times(matrix:&[u32;32],mut vector:u32)->u32{
+ let mut sum=0_u32;
+ let mut index=0_usize;
+ while vector!=0{
+  if vector&1!=0{sum^=matrix[index];}
+  vector>>=1;
+  index+=1;
+ }
+ sum
+}
+fn gf2_matrix_square(square:&mut [u32;32],matrix:&[u32;32]){
+ for n in 0..32{square[n]=gf2_matrix_times(matrix,matrix[n]);}
+}
+/// Combines two finalized IEEE CRC-32 values without reading either byte stream again.
+fn crc32_combine(mut crc1:u32,crc2:u32,mut second_len:u64)->u32{
+ if second_len==0{return crc1}
+ let mut odd=[0_u32;32];
+ let mut even=[0_u32;32];
+ odd[0]=0xedb8_8320;
+ let mut row=1_u32;
+ for slot in odd.iter_mut().skip(1){*slot=row;row<<=1;}
+ gf2_matrix_square(&mut even,&odd);
+ gf2_matrix_square(&mut odd,&even);
+ loop{
+  gf2_matrix_square(&mut even,&odd);
+  if second_len&1!=0{crc1=gf2_matrix_times(&even,crc1);}
+  second_len>>=1;
+  if second_len==0{break}
+  gf2_matrix_square(&mut odd,&even);
+  if second_len&1!=0{crc1=gf2_matrix_times(&odd,crc1);}
+  second_len>>=1;
+  if second_len==0{break}
+ }
+ crc1^crc2
+}
+/// Applies a repeated pattern in O(log(count)) CRC-combine operations and constant memory.
+fn crc32_repeat(mut crc_state:u32,pattern:&[u8],count:u64)->u32{
+ if pattern.is_empty()||count==0{return crc_state}
+ let pattern_len=pattern.len() as u64;
+ let repetitions=count/pattern_len;
+ let remainder=(count%pattern_len) as usize;
+ if repetitions!=0{
+  let mut repeated_crc=0_u32;
+  let mut block_crc=!crc32_update(!0_u32,pattern);
+  let mut block_len=pattern_len;
+  let mut remaining=repetitions;
+  while remaining!=0{
+   if remaining&1!=0{
+    repeated_crc=crc32_combine(repeated_crc,block_crc,block_len);
+   }
+   remaining>>=1;
+   if remaining!=0{
+    block_crc=crc32_combine(block_crc,block_crc,block_len);
+    block_len=block_len.saturating_mul(2);
+   }
+  }
+  let combined=crc32_combine(!crc_state,repeated_crc,repetitions.saturating_mul(pattern_len));
+  crc_state=!combined;
+ }
+ if remainder!=0{
+  crc_state=crc32_update(crc_state,&pattern[..remainder]);
+ }
+ crc_state
 }
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
@@ -134,7 +196,7 @@ pub fn parse_android_boot_image_v3_v4(data:&[u8],budget:ParseBudget,max_payload_
  if data.get(24..40).ok_or(ParseError::OutOfBounds)?.iter().any(|b|*b!=0){return Err(ParseError::InvalidBootHeader)}
  let header_version=u32le(data,40)?;
  let expected_header_size=match header_version{3=>BOOT_V3_HEADER_SIZE,4=>BOOT_V4_HEADER_SIZE,_=>return Err(ParseError::UnsupportedBootHeaderVersion)};
- if kernel_size==0||ramdisk_size==0{return Err(ParseError::InvalidBootHeader)}
+ if kernel_size==0{return Err(ParseError::InvalidBootHeader)}
  if usize::try_from(header_size).map_err(|_|ParseError::IntegerOverflow)?!=expected_header_size{return Err(ParseError::InvalidBootHeader)}
  if data.len()<expected_header_size{return Err(ParseError::OutOfBounds)}
  let signature_size=if header_version==4{u32le(data,1580)?}else{0};
@@ -231,6 +293,19 @@ mod tests{
   assert!(parse_android_sparse_image(&v,budget(),8192).is_ok());
  }
 
+ #[test]fn crc32_repeat_matches_bytewise_reference(){
+  for pattern in [&[0_u8][..],&[1_u8,2,3,4][..],&[0xa5_u8,0x5a,0x11][..]]{
+   for count in 0_u64..257{
+    let mut expected=!0_u32;
+    for index in 0..count{let offset=(index as usize)%pattern.len();expected=crc32_update(expected,&pattern[offset..offset+1]);}
+    assert_eq!(crc32_repeat(!0_u32,pattern,count),expected,"pattern={pattern:?}, count={count}");
+   }
+  }
+ }
+ #[test]fn crc32_repeat_handles_multi_gigabyte_sparse_runs_in_logarithmic_work(){
+  assert_eq!(crc32_repeat(!0_u32,&[0],4_u64*1024*1024*1024),!0xd202_ef8d_u32);
+  assert_eq!(crc32_repeat(!0_u32,&[0x12,0x34,0x56,0x78],4_u64*1024*1024*1024),!0xe369_2abd_u32);
+ }
  #[test]fn boot_v3_indexes_kernel_and_ramdisk_without_copying(){
   let mut v=vec![0_u8;8192+4096];v[..8].copy_from_slice(b"ANDROID!");v[8..12].copy_from_slice(&4096_u32.to_le_bytes());v[12..16].copy_from_slice(&1024_u32.to_le_bytes());v[20..24].copy_from_slice(&1580_u32.to_le_bytes());v[40..44].copy_from_slice(&3_u32.to_le_bytes());
   let p=parse_android_boot_image_v3_v4(&v,budget(),8192).unwrap();assert_eq!(p.kernel,4096..8192);assert_eq!(p.ramdisk,8192..9216);assert_eq!(p.boot_signature,None);

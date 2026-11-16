@@ -6,6 +6,8 @@ on:
       - "app/**"
       - "core/**"
       - "native/**"
+      - "cpp/**"
+      - "cpp/**"
       - "rust/**"
       - "third_party/manifest/**"
       - "third_party/porting/**"
@@ -22,6 +24,7 @@ on:
       - "app/**"
       - "core/**"
       - "native/**"
+      - "cpp/**"
       - "rust/**"
       - "third_party/manifest/**"
       - "third_party/porting/**"
@@ -168,6 +171,7 @@ jobs:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

@@ -207,6 +207,7 @@ pub fn parse_vendor_boot_image_v3_v4(
             let ramdisk_size = read_u32(bytes, 0)?;
             let ramdisk_offset = read_u32(bytes, 4)?;
             let ramdisk_type = read_u32(bytes, 8)?;
+            VendorRamdiskFragmentType::try_from(ramdisk_type)?;
             if ramdisk_size == 0 {
                 return Err(ParseError::InvalidBootHeader);
             }
@@ -280,6 +281,7 @@ pub enum BootMaterialKind {
     InitRamdisk,
     InitBootSignature,
     VendorRamdisk,
+    VendorRamdiskFragment,
     DeviceTreeBlob,
     VendorRamdiskTable,
     Bootconfig,
@@ -306,6 +308,7 @@ pub enum BootMaterialError {
     InvalidImageIndex,
     MissingKernel,
     MissingBootRamdisk,
+    MissingRamdisk,
     InvalidInitBootSemantics,
 }
 
@@ -352,9 +355,7 @@ pub fn build_boot_material_set(
     if boot.header.kernel_size == 0 {
         return Err(BootMaterialError::MissingKernel);
     }
-    if boot.header.ramdisk_size == 0 {
-        return Err(BootMaterialError::MissingBootRamdisk);
-    }
+    let has_boot_ramdisk = boot.header.ramdisk_size != 0;
     if boot.total_indexed_bytes > boot_data.len() as u64 {
         return Err(BootMaterialError::InvalidImageIndex);
     }
@@ -362,8 +363,10 @@ pub fn build_boot_material_set(
     let mut entries = Vec::new();
     push_material(&mut entries, BootMaterialKind::Kernel, BootMaterialSource::BootImage,
         boot.kernel.clone(), boot_data.len(), max_entries)?;
-    push_material(&mut entries, BootMaterialKind::BootRamdisk, BootMaterialSource::BootImage,
-        boot.ramdisk.clone(), boot_data.len(), max_entries)?;
+    if has_boot_ramdisk {
+        push_material(&mut entries, BootMaterialKind::BootRamdisk, BootMaterialSource::BootImage,
+            boot.ramdisk.clone(), boot_data.len(), max_entries)?;
+    }
     if let Some(range) = &boot.boot_signature {
         push_material(&mut entries, BootMaterialKind::BootSignature, BootMaterialSource::BootImage,
             range.clone(), boot_data.len(), max_entries)?;
@@ -404,6 +407,14 @@ pub fn build_boot_material_set(
     } else {
         false
     };
+
+    let has_init_ramdisk = init_boot.is_some();
+    let has_vendor_ramdisk = vendor_boot
+        .map(|(_, index)| index.header.vendor_ramdisk_size != 0)
+        .unwrap_or(false);
+    if !has_boot_ramdisk && !has_init_ramdisk && !has_vendor_ramdisk {
+        return Err(BootMaterialError::MissingRamdisk);
+    }
 
     Ok(BootMaterialSet {
         entries,
@@ -579,6 +590,33 @@ mod tests {
     }
 
     #[test]
+    fn boot_material_set_accepts_init_boot_when_boot_ramdisk_is_empty() {
+        let boot_data = vec![0_u8; 8192];
+        let mut boot = synthetic_boot_index();
+        boot.header.ramdisk_size = 0;
+        boot.ramdisk = 8192..8192;
+        boot.total_indexed_bytes = 8192;
+
+        let init_data = vec![0_u8; 8192];
+        let init = crate::InitBootImageIndex {
+            header: crate::AndroidBootHeaderV3V4 {
+                header_version: 4, header_size: 1584, kernel_size: 0,
+                ramdisk_size: 4096, os_version: 0, signature_size: 0,
+            },
+            header_page: 0..4096,
+            ramdisk: 4096..8192,
+            boot_signature: None,
+            total_indexed_bytes: 8192,
+        };
+        let set = build_boot_material_set(
+            &boot_data, &boot, Some((&init_data, &init)), None, 8,
+        ).unwrap();
+        assert!(set.has_init_boot);
+        assert!(!set.entries.iter().any(|entry| entry.kind == BootMaterialKind::BootRamdisk));
+        assert!(set.entries.iter().any(|entry| entry.kind == BootMaterialKind::InitRamdisk));
+    }
+
+    #[test]
     fn boot_material_set_rejects_invalid_init_boot_semantics() {
         let boot_data = vec![0_u8; 9216];
         let init_data = vec![0_u8; 8192];
@@ -604,4 +642,257 @@ mod tests {
         assert!(set.entries.iter().any(|entry| entry.kind == BootMaterialKind::InitRamdisk));
     }
 
+}
+
+
+/// Boot mode used when selecting v4 vendor ramdisk fragments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VendorRamdiskBootMode {
+    Normal,
+    Recovery,
+}
+
+/// Android vendor ramdisk fragment types from the v4 table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum VendorRamdiskFragmentType {
+    None = 0,
+    Platform = 1,
+    Recovery = 2,
+    Dlkm = 3,
+}
+
+impl TryFrom<u32> for VendorRamdiskFragmentType {
+    type Error = ParseError;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::None),
+            1 => Ok(Self::Platform),
+            2 => Ok(Self::Recovery),
+            3 => Ok(Self::Dlkm),
+            _ => Err(ParseError::InvalidBootHeader),
+        }
+    }
+}
+
+/// A selected fragment keeps its table index and source range; payload bytes are never copied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedVendorRamdiskFragment {
+    pub table_index: usize,
+    pub fragment_type: VendorRamdiskFragmentType,
+    pub name: [u8; VENDOR_RAMDISK_NAME_SIZE],
+    pub payload: Range<usize>,
+}
+
+/// Matches a fragment board ID against the target board ID.
+/// A zero fragment word is a wildcard; every non-zero word must match.
+fn board_id_matches(
+    fragment_board_id: &[u32; VENDOR_RAMDISK_BOARD_ID_WORDS],
+    target_board_id: &[u32; VENDOR_RAMDISK_BOARD_ID_WORDS],
+) -> bool {
+    fragment_board_id
+        .iter()
+        .zip(target_board_id.iter())
+        .all(|(required, actual)| *required == 0 || required == actual)
+}
+
+/// Selects v4 fragments for a boot mode and target board.
+///
+/// Normal mode selects matching PLATFORM and DLKM fragments. Recovery mode selects
+/// matching RECOVERY fragments. NONE fragments are deliberately not selected because
+/// their semantics are not sufficient to infer a safe boot-mode policy. Unknown fragment
+/// types are rejected by the parser/selector. The caller remains responsible for the
+/// Android bootloader's exact platform-ID source and final ramdisk assembly order.
+pub fn select_vendor_ramdisk_fragments(
+    index: &VendorBootImageIndex,
+    target_board_id: &[u32; VENDOR_RAMDISK_BOARD_ID_WORDS],
+    mode: VendorRamdiskBootMode,
+    max_selected: usize,
+) -> Result<Vec<SelectedVendorRamdiskFragment>, BootMaterialError> {
+    if index.header.header_version != 4 {
+        return Ok(Vec::new());
+    }
+    let mut selected = Vec::new();
+    for (table_index, entry) in index.ramdisk_entries.iter().enumerate() {
+        let fragment_type = VendorRamdiskFragmentType::try_from(entry.ramdisk_type)
+            .map_err(|_| BootMaterialError::InvalidImageIndex)?;
+        let mode_matches = match mode {
+            VendorRamdiskBootMode::Normal => matches!(
+                fragment_type,
+                VendorRamdiskFragmentType::Platform | VendorRamdiskFragmentType::Dlkm
+            ),
+            VendorRamdiskBootMode::Recovery => {
+                fragment_type == VendorRamdiskFragmentType::Recovery
+            }
+        };
+        if !mode_matches || !board_id_matches(&entry.board_id, target_board_id) {
+            continue;
+        }
+        if selected.len() >= max_selected {
+            return Err(BootMaterialError::ResourceLimit);
+        }
+        selected.push(SelectedVendorRamdiskFragment {
+            table_index,
+            fragment_type,
+            name: entry.ramdisk_name,
+            payload: entry.payload.clone(),
+        });
+    }
+    Ok(selected)
+}
+
+
+#[cfg(test)]
+mod fragment_selection_tests {
+    use super::*;
+
+    fn v4_image() -> Vec<u8> {
+        let mut image = vec![0_u8; 16_384];
+        image[..8].copy_from_slice(b"VNDRBOOT");
+        image[8..12].copy_from_slice(&4_u32.to_le_bytes());
+        image[12..16].copy_from_slice(&4096_u32.to_le_bytes());
+        image[24..28].copy_from_slice(&1024_u32.to_le_bytes());
+        image[2096..2100].copy_from_slice(&2128_u32.to_le_bytes());
+        image[2100..2104].copy_from_slice(&2048_u32.to_le_bytes());
+        image[2104..2112].copy_from_slice(&0x8200_0000_u64.to_le_bytes());
+        image[2112..2116].copy_from_slice(&216_u32.to_le_bytes());
+        image[2116..2120].copy_from_slice(&2_u32.to_le_bytes());
+        image[2120..2124].copy_from_slice(&108_u32.to_le_bytes());
+        image[2124..2128].copy_from_slice(&0_u32.to_le_bytes());
+
+        // Two non-overlapping 256-byte fragments within the 1 KiB vendor ramdisk.
+        image[4096..4100].copy_from_slice(&[1, 2, 3, 4]);
+        let table = 12_288;
+        for (slot, kind, board_word) in [(0_usize, 1_u32, 0x1234_u32), (1, 2, 0_u32)] {
+            let offset = table + slot * 108;
+            image[offset..offset + 4].copy_from_slice(&256_u32.to_le_bytes());
+            image[offset + 4..offset + 8]
+                .copy_from_slice(&(slot as u32 * 256).to_le_bytes());
+            image[offset + 8..offset + 12].copy_from_slice(&kind.to_le_bytes());
+            image[offset + 12..offset + 16].copy_from_slice(if slot == 0 {
+                b"plat"
+            } else {
+                b"reco"
+            });
+            image[offset + 44..offset + 48].copy_from_slice(&board_word.to_le_bytes());
+        }
+        image
+    }
+
+    fn board(id: u32) -> [u32; VENDOR_RAMDISK_BOARD_ID_WORDS] {
+        let mut value = [0_u32; VENDOR_RAMDISK_BOARD_ID_WORDS];
+        value[0] = id;
+        value
+    }
+
+    #[test]
+    fn normal_mode_selects_matching_platform_fragments_only() {
+        let image = v4_image();
+        let index = parse_vendor_boot_image_v3_v4(
+            &image,
+            ParseBudget { max_input_bytes: 1 << 20, max_items: 16, max_nesting_depth: 4 },
+            4096,
+        ).unwrap();
+        let selected = select_vendor_ramdisk_fragments(
+            &index, &board(0x1234), VendorRamdiskBootMode::Normal, 4
+        ).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].table_index, 0);
+        assert_eq!(selected[0].fragment_type, VendorRamdiskFragmentType::Platform);
+        assert_eq!(selected[0].payload, 4096..4352);
+    }
+
+    #[test]
+    fn recovery_mode_selects_recovery_fragments_and_zero_board_id_is_wildcard() {
+        let image = v4_image();
+        let index = parse_vendor_boot_image_v3_v4(
+            &image,
+            ParseBudget { max_input_bytes: 1 << 20, max_items: 16, max_nesting_depth: 4 },
+            4096,
+        ).unwrap();
+        let selected = select_vendor_ramdisk_fragments(
+            &index, &board(0x9999), VendorRamdiskBootMode::Recovery, 1
+        ).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].table_index, 1);
+        assert_eq!(selected[0].fragment_type, VendorRamdiskFragmentType::Recovery);
+    }
+
+    #[test]
+    fn selection_budget_limits_matches_not_total_table_entries() {
+        let image = v4_image();
+        let index = parse_vendor_boot_image_v3_v4(
+            &image,
+            ParseBudget { max_input_bytes: 1 << 20, max_items: 16, max_nesting_depth: 4 },
+            4096,
+        ).unwrap();
+        assert_eq!(
+            select_vendor_ramdisk_fragments(
+                &index, &board(0x1234), VendorRamdiskBootMode::Normal, 0
+            ),
+            Err(BootMaterialError::ResourceLimit)
+        );
+    }
+
+    #[test]
+    fn selected_materials_reference_only_selected_fragment_payloads() {
+        let image = v4_image();
+        let index = parse_vendor_boot_image_v3_v4(
+            &image,
+            ParseBudget { max_input_bytes: 1 << 20, max_items: 16, max_nesting_depth: 4 },
+            4096,
+        ).unwrap();
+        let materials = build_selected_vendor_ramdisk_materials(
+            &image, &index, &board(0x1234), VendorRamdiskBootMode::Normal, 2
+        ).unwrap();
+        assert_eq!(materials.len(), 1);
+        assert_eq!(materials[0].kind, BootMaterialKind::VendorRamdiskFragment);
+        assert_eq!(materials[0].source, BootMaterialSource::VendorBootImage);
+        assert_eq!(materials[0].range, 4096..4352);
+    }
+
+    #[test]
+    fn parser_rejects_unknown_fragment_type() {
+        let mut image = v4_image();
+        image[12_288 + 8..12_288 + 12].copy_from_slice(&99_u32.to_le_bytes());
+        assert_eq!(
+            parse_vendor_boot_image_v3_v4(
+                &image,
+                ParseBudget { max_input_bytes: 1 << 20, max_items: 16, max_nesting_depth: 4 },
+                4096,
+            ),
+            Err(ParseError::InvalidBootHeader)
+        );
+    }
+}
+
+
+/// Builds selected vendor fragment materials without exposing the containing monolithic
+/// vendor-ramdisk range as a load instruction. The returned entries still borrow source bytes.
+pub fn build_selected_vendor_ramdisk_materials(
+    vendor_boot_data: &[u8],
+    index: &VendorBootImageIndex,
+    target_board_id: &[u32; VENDOR_RAMDISK_BOARD_ID_WORDS],
+    mode: VendorRamdiskBootMode,
+    max_entries: usize,
+) -> Result<Vec<BootMaterialEntry>, BootMaterialError> {
+    if index.total_indexed_bytes > vendor_boot_data.len() as u64 {
+        return Err(BootMaterialError::InvalidImageIndex);
+    }
+    let selected = select_vendor_ramdisk_fragments(index, target_board_id, mode, max_entries)?;
+    let mut materials = Vec::with_capacity(selected.len());
+    for fragment in selected {
+        if fragment.payload.start > fragment.payload.end
+            || fragment.payload.end > vendor_boot_data.len()
+        {
+            return Err(BootMaterialError::InvalidImageIndex);
+        }
+        materials.push(BootMaterialEntry {
+            kind: BootMaterialKind::VendorRamdiskFragment,
+            source: BootMaterialSource::VendorBootImage,
+            range: fragment.payload,
+        });
+    }
+    Ok(materials)
 }
