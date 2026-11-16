@@ -295,3 +295,6 @@ mod tests {
         assert_eq!((decoded.vm_id, decoded.generation, decoded.commit_sequence), (4, 8, 11));
     }
 }
+
+mod replay;
+pub use replay::{ReplayError, ReplayState, HARD_MAX_REPLAY_OBJECTS_PER_VM, HARD_MAX_REPLAY_OBJECT_IDS, HARD_MAX_REPLAY_TRACKED_PAGES_PER_VM, HARD_MAX_REPLAY_VMS, HARD_MAX_REPLAY_VM_QUOTA};
