@@ -25,9 +25,10 @@ The memory backend in tests proves core semantics only; it is not evidence of du
 - Page size: 4 KiB.
 - Maximum single request: 16 MiB (inherited hard bound).
 - Maximum object capacity: 64 GiB.
-- Maximum per-VM quota: 256 GiB.
+- Maximum per-VM quota: 256 GiB (configured quota ceiling; actual in-memory sparse allocation index is separately capped at 262,144 pages / 1 GiB). 
+- Maximum objects per VM: 1,024, bounding the volatile registry.
 - Batch pages: request-derived and bounded to at most 4098 pages.
 
 ## Tests
 
-Tests cover sparse-zero reads, partial-page read/modify/write, quota rejection before commit, discard reclamation, stale generation rejection, backend failure atomicity, flush forwarding, and object-name/capacity validation.
+Tests cover sparse-zero reads, partial-page read/modify/write, quota rejection before commit, quota-shrink rejection, per-VM object-count bounds, discard reclamation, stale generation rejection, backend failure atomicity, flush forwarding, and object-name/capacity validation.
