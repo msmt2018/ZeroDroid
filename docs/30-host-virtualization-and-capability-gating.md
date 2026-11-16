@@ -36,7 +36,7 @@ AVF：检测设备实际提供的 API、VirtualizationService、权限和支持�
 
 ## 3.2 能力探测执行框架
 
-HostCapabilityDiscovery 通过独立的 architecture、AVF、KVM probe 接口收集证据，普通探测异常会转成对应的 ERROR 事实并附带来源与异常类型；协程取消会继续向上传播，不会被吞掉。探测器本身不推断 API level、设备型号或包是否安装，也不提供默认成功的 Android 实现。平台适配器必须在其实现前完成权限/API 审计，并只返回由真实系统接口验证的事实。报告同时返回原始证据、后端决策和探测失败记录，便于 UI/日志解释阻断原因。
+AndroidHostCapabilityDiscovery 已将 AndroidHostArchitectureProbe、AndroidAvfCapabilityProbe、AndroidKvmCapabilityProbe 接入 HostCapabilityDiscovery。Android AVF probe 使用官方 system feature 字符串和 MANAGE_VIRTUAL_MACHINE 权限检查；由于 VirtualMachineManager 属于受限 @SystemApi，普通 public SDK adapter 不通过反射或隐藏 Binder 查询服务状态及 VM 类型，因此 serviceAvailable 保持 UNKNOWN、supportedVmTypes 为空。Android KVM probe 将 Native C ABI 的 device/API 与临时 VM_CREATE 结果映射为独立证据；EL2、Stage-2、GIC 仍保持 UNKNOWN。HostCapabilityDiscovery 将普通异常和 LinkageError 转成 ERROR 事实并附带来源与异常类型；协程取消继续向上传播。报告同时返回原始证据、后端决策和探测失败记录，便于 UI/日志解释阻断原因。
 
 ## 4. Root、Shizuku 与系统权限
 
