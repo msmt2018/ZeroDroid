@@ -27,10 +27,25 @@ std::mutex g_mutex;
 std::unordered_map<std::uint64_t, Entry> g_buffers;
 std::uint64_t g_next_handle = 1;
 std::uint64_t g_accounted_bytes = 0;
+std::size_t g_pending_allocations = 0;
 constexpr std::size_t kMaxLiveBuffers = 64;
 constexpr std::uint64_t kMaxBufferBytes = 64ULL * 1024ULL * 1024ULL;
 constexpr std::uint64_t kMaxTotalBytes = 256ULL * 1024ULL * 1024ULL;
 constexpr std::uint32_t kMaxDimension = 8192;
+
+struct AllocationReservation {
+    explicit AllocationReservation(std::uint64_t reserved) : bytes(reserved) {}
+    AllocationReservation(const AllocationReservation&) = delete;
+    AllocationReservation& operator=(const AllocationReservation&) = delete;
+    ~AllocationReservation() {
+        if (!active) return;
+        std::lock_guard<std::mutex> lock(g_mutex);
+        g_accounted_bytes -= bytes;
+        --g_pending_allocations;
+    }
+    std::uint64_t bytes;
+    bool active = true;
+};
 
 constexpr std::uint64_t kAllowedUsage =
         AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
@@ -95,6 +110,25 @@ Java_dev_zerodroid_core_nativebridge_NativeRuntime_nativeAllocateHardwareBuffer(
         return nullptr;
     }
 
+    constexpr std::uint64_t kBytesPerPixel = 4;
+    const std::uint64_t estimated_bytes =
+            static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height) * kBytesPerPixel;
+    if (estimated_bytes > kMaxBufferBytes) {
+        throw_argument(env, "Requested HardwareBuffer exceeds the 64 MiB allocation budget");
+        return nullptr;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        if (g_buffers.size() + g_pending_allocations >= kMaxLiveBuffers ||
+            estimated_bytes > kMaxTotalBytes - g_accounted_bytes) {
+            throw_state(env, "HardwareBuffer allocation reservation exceeds registry budget");
+            return nullptr;
+        }
+        ++g_pending_allocations;
+        g_accounted_bytes += estimated_bytes;
+    }
+    AllocationReservation reservation(estimated_bytes);
+
     AHardwareBuffer_Desc requested{};
     requested.width = static_cast<std::uint32_t>(width);
     requested.height = static_cast<std::uint32_t>(height);
@@ -119,7 +153,6 @@ Java_dev_zerodroid_core_nativebridge_NativeRuntime_nativeAllocateHardwareBuffer(
         return nullptr;
     }
 
-    constexpr std::uint64_t kBytesPerPixel = 4;
     if (actual.stride == 0 ||
         actual.height > std::numeric_limits<std::uint64_t>::max() / actual.stride ||
         static_cast<std::uint64_t>(actual.stride) * actual.height >
@@ -137,12 +170,16 @@ Java_dev_zerodroid_core_nativebridge_NativeRuntime_nativeAllocateHardwareBuffer(
     std::uint64_t handle = 0;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
-        if (g_buffers.size() >= kMaxLiveBuffers ||
-            bytes > kMaxTotalBytes - g_accounted_bytes) {
-            throw_state(env, "AHardwareBuffer registry count or memory budget exhausted");
+        const std::uint64_t extra_bytes = bytes > reservation.bytes ? bytes - reservation.bytes : 0;
+        if (bytes > kMaxBufferBytes || extra_bytes > kMaxTotalBytes - g_accounted_bytes) {
+            throw_state(env, "Actual HardwareBuffer stride exceeds the reserved memory budget");
             return nullptr;
         }
+        g_accounted_bytes = g_accounted_bytes - reservation.bytes + bytes;
+        --g_pending_allocations;
+        reservation.active = false;
         if (!next_handle(&handle)) {
+            g_accounted_bytes -= bytes;
             throw_state(env, "AHardwareBuffer handle space exhausted");
             return nullptr;
         }
@@ -150,14 +187,16 @@ Java_dev_zerodroid_core_nativebridge_NativeRuntime_nativeAllocateHardwareBuffer(
             const auto inserted = g_buffers.emplace(
                     handle, Entry{std::move(buffer), bytes});
             if (!inserted.second) {
+                g_accounted_bytes -= bytes;
                 throw_state(env, "AHardwareBuffer handle collision");
                 return nullptr;
             }
-            g_accounted_bytes += bytes;
         } catch (const std::bad_alloc&) {
+            g_accounted_bytes -= bytes;
             throw_state(env, "AHardwareBuffer registry allocation failed");
             return nullptr;
         } catch (...) {
+            g_accounted_bytes -= bytes;
             throw_state(env, "Unexpected AHardwareBuffer registry failure");
             return nullptr;
         }
@@ -177,12 +216,17 @@ Java_dev_zerodroid_core_nativebridge_NativeRuntime_nativeAllocateHardwareBuffer(
     }
     jlongArray result = describe(env, handle, retained.get());
     if (result == nullptr) {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        const auto found = g_buffers.find(handle);
-        if (found != g_buffers.end()) {
-            g_accounted_bytes -= found->second.accounted_bytes;
-            g_buffers.erase(found);
+        HardwareBufferPtr rollback;
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            const auto found = g_buffers.find(handle);
+            if (found != g_buffers.end()) {
+                g_accounted_bytes -= found->second.accounted_bytes;
+                rollback = std::move(found->second.buffer);
+                g_buffers.erase(found);
+            }
         }
+        rollback.reset();
     }
     return result;
 }
