@@ -108,6 +108,9 @@ pub fn merge_bootconfig(
     second: &BootConfig,
     max_entries: usize,
 ) -> Result<BootConfig, BootConfigError> {
+    if first.entries.len() > max_entries {
+        return Err(BootConfigError::ResourceLimit);
+    }
     let mut merged = first.clone();
     let mut seen: BTreeMap<&str, &str> = first.entries.iter()
         .map(|entry| (entry.key.as_str(), entry.value.as_str())).collect();
