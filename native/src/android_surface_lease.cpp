@@ -5,6 +5,8 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <limits>
+#include <new>
 #include <mutex>
 #include <unordered_map>
 
@@ -31,7 +33,7 @@ void throw_illegal_state(JNIEnv* env, const char* message) noexcept {
 
 bool allocate_handle(std::uint64_t* out) noexcept {
     auto current = g_next_handle.load(std::memory_order_relaxed);
-    while (current != 0 && current < static_cast<std::uint64_t>(INT64_MAX)) {
+    while (current != 0 && current < static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
         if (g_next_handle.compare_exchange_weak(
                 current, current + 1, std::memory_order_relaxed,
                 std::memory_order_relaxed)) {
