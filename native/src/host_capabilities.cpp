@@ -97,9 +97,9 @@ extern "C" ZDROID_API zdroid_status zdroid_host_probe_capabilities(
      * This does not create a vCPU or start a guest.
      */
     const int vm_fd = ioctl(fd, kvm_create_vm, 0UL);
+    const int create_error = vm_fd < 0 ? errno : 0;
     close(fd);
     if (vm_fd < 0) {
-        const int create_error = errno;
         out_capabilities->vm_create_errno = create_error;
         if (create_error == EACCES || create_error == EPERM) {
             out_capabilities->vm_create_state = ZDROID_KVM_PROBE_ACCESS_DENIED;
