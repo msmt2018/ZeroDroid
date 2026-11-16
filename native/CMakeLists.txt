@@ -10,7 +10,7 @@ endif()
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../cpp ${CMAKE_CURRENT_BINARY_DIR}/zerodroid_cpp)
 
 # Host probing is discovery only; it does not authorize or start a guest VM.
-add_library(zerodroid_core STATIC
+add_library(zerodroid_core SHARED
     src/status.cpp
     src/runtime.cpp
     src/host_capabilities.cpp
@@ -20,6 +20,7 @@ target_compile_features(zerodroid_core PUBLIC cxx_std_20)
 target_compile_definitions(zerodroid_core PRIVATE ZERODROID_BUILDING_LIBRARY)
 target_link_libraries(zerodroid_core PUBLIC zerodroid_vm_core)
 set_target_properties(zerodroid_core PROPERTIES
+    OUTPUT_NAME zerodroid_vm
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN YES
     POSITION_INDEPENDENT_CODE YES
