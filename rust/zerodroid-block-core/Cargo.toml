@@ -1,0 +1,11 @@
+[package]
+name = "zerodroid-block-core"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Bounded Guest virtual block-device contract for ZeroDroid"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
