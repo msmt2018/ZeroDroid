@@ -16,7 +16,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define ZDROID_ABI_VERSION 1u
+#define ZDROID_ABI_VERSION 2u
 #define ZDROID_ERROR_MESSAGE_CAPACITY 256u
 typedef uint64_t zdroid_handle;
 typedef uint32_t zdroid_status;
@@ -45,6 +45,9 @@ typedef struct zdroid_host_capabilities {
  zdroid_kvm_probe_state kvm_state;
  int32_t kvm_api_version;
  int32_t kvm_errno;
+ /* Temporary KVM VM is created and immediately closed to verify VM_CREATE authorization. */
+ zdroid_kvm_probe_state vm_create_state;
+ int32_t vm_create_errno;
 } zdroid_host_capabilities;
 typedef struct zdroid_error_info {
  uint32_t struct_size; uint32_t code; uint32_t domain; uint32_t reserved;
