@@ -6,6 +6,9 @@ pub const PAGE_SIZE: usize = 4096;
 pub const HARD_MAX_OBJECT_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 pub const HARD_MAX_VM_QUOTA_BYTES: u64 = 256 * 1024 * 1024 * 1024;
 pub const HARD_MAX_BATCH_PAGES: usize = (HARD_MAX_TRANSFER_BYTES as usize / PAGE_SIZE) + 2;
+/// Bounds in-memory registry/index growth until durable metadata is implemented.
+pub const HARD_MAX_OBJECTS_PER_VM: usize = 1024;
+pub const HARD_MAX_TRACKED_PAGES_PER_VM: usize = 262_144;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ObjectId(pub u128);
@@ -60,6 +63,11 @@ impl<B: SparseCowBackend> SparseCowStore<B> {
             // backing pages are orphaned for backend garbage collection.
             self.objects.retain(|(owner, _), _| *owner != vm.0);
         }
+        if self.vms.get(&vm.0).is_some_and(|current| current.generation == generation)
+            && self.allocated_bytes(vm) > quota_bytes
+        {
+            return Err(StoreError::QuotaExceeded);
+        }
         self.vms.insert(vm.0, VmMeta { generation, quota: quota_bytes });
         Ok(())
     }
@@ -70,6 +78,9 @@ impl<B: SparseCowBackend> SparseCowStore<B> {
         if capacity == 0 || capacity > HARD_MAX_OBJECT_BYTES { return Err(StoreError::InvalidCapacity); }
         let key = (vm.0, name.to_owned());
         if self.objects.contains_key(&key) { return Err(StoreError::InvalidName); }
+        if self.objects.keys().filter(|(owner, _)| *owner == vm.0).count() >= HARD_MAX_OBJECTS_PER_VM {
+            return Err(StoreError::TooManyPages);
+        }
         let id = ObjectId(self.next_object_id);
         self.next_object_id = self.next_object_id.checked_add(1).ok_or(StoreError::IntegerOverflow)?;
         self.objects.insert(key, ObjectMeta { id, capacity, allocated: BTreeSet::new() });
@@ -112,6 +123,10 @@ impl<B: SparseCowBackend> SparseCowStore<B> {
         let page_count = usize::try_from(last - first + 1).map_err(|_| StoreError::IntegerOverflow)?;
         if page_count > HARD_MAX_BATCH_PAGES { return Err(StoreError::TooManyPages); }
         let new_pages = (first..=last).filter(|p| !meta.allocated.contains(p)).count() as u64;
+        let tracked_pages = self.allocated_bytes(vm) / PAGE_SIZE as u64;
+        if tracked_pages.checked_add(new_pages).ok_or(StoreError::IntegerOverflow)? > HARD_MAX_TRACKED_PAGES_PER_VM as u64 {
+            return Err(StoreError::TooManyPages);
+        }
         let vm_meta = *self.vms.get(&vm.0).ok_or(StoreError::StaleGeneration)?;
         let additional = new_pages.checked_mul(PAGE_SIZE as u64).ok_or(StoreError::IntegerOverflow)?;
         if self.allocated_bytes(vm).checked_add(additional).ok_or(StoreError::IntegerOverflow)? > vm_meta.quota {
@@ -258,6 +273,22 @@ mod tests {
         s.backend.fail_commit = true;
         assert_eq!(s.write(VmId(1), 7, "super", 0, &[4; 32]), Err(StoreError::BackendFailure));
         assert_eq!(s.allocated_bytes(VmId(1)), 0);
+    }
+    #[test]
+    fn quota_cannot_be_shrunk_below_existing_allocations() {
+        let mut s = setup(PAGE_SIZE as u64 * 2);
+        s.write(VmId(1), 7, "super", 0, &[8; PAGE_SIZE]).unwrap();
+        assert_eq!(s.register_vm(VmId(1), 7, PAGE_SIZE as u64 - 1), Err(StoreError::QuotaExceeded));
+        assert_eq!(s.allocated_bytes(VmId(1)), PAGE_SIZE as u64);
+    }
+    #[test]
+    fn object_registry_is_bounded_per_vm() {
+        let mut s = SparseCowStore::new(MemoryBackend::default());
+        s.register_vm(VmId(9), 1, PAGE_SIZE as u64).unwrap();
+        for i in 0..HARD_MAX_OBJECTS_PER_VM {
+            s.create_object(VmId(9), 1, &format!("obj{i}"), PAGE_SIZE as u64).unwrap();
+        }
+        assert_eq!(s.create_object(VmId(9), 1, "overflow", PAGE_SIZE as u64), Err(StoreError::TooManyPages));
     }
     #[test]
     fn flush_is_forwarded() {
