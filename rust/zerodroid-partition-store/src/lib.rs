@@ -283,7 +283,7 @@ mod tests {
             let bytes = self.partitions.get(partition).ok_or(StoreError::UnknownPartition)?;
             Ok(PartitionInfo {
                 capacity_bytes: 4096.max(bytes.len() as u64),
-                flashable: true,
+                flashable: partition != "system",
                 erasable: partition != "system",
             })
         }
@@ -380,7 +380,7 @@ mod tests {
     fn generation_and_partition_policy_are_enforced() {
         let mut store = MemoryStore::with_partition("system", vec![1; 8]);
         assert_eq!(FlashTransaction::begin(&mut store, VmId(1), 6, "system", 4, policy()).err(), Some(StoreError::StaleVmGeneration));
-        assert_eq!(FlashTransaction::begin(&mut store, VmId(1), 7, "system", 4, policy()).err(), Some(StoreError::NotFlashable).filter(|_| false));
+        assert_eq!(FlashTransaction::begin(&mut store, VmId(1), 7, "system", 4, policy()).err(), Some(StoreError::NotFlashable));
     }
 
     #[test]
