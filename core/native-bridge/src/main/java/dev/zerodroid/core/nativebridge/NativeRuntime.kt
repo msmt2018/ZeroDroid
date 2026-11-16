@@ -5,9 +5,9 @@ object NativeRuntime {
     init { System.loadLibrary("zerodroid_jni") }
 
     external fun abiVersion(): Int
-    internal external fun nativeAcquireSurface(surface: android.view.Surface): LongArray?
-    internal external fun nativeQuerySurface(handle: Long): LongArray?
-    internal external fun nativeReleaseSurface(handle: Long): Boolean
+    private external fun nativeAcquireSurface(surface: android.view.Surface): LongArray?
+    private external fun nativeQuerySurface(handle: Long): LongArray?
+    private external fun nativeReleaseSurface(handle: Long): Boolean
 
     /** Acquires one owned ANativeWindow reference from [surface]. */
     fun acquireSurface(surface: android.view.Surface): NativeSurfaceLease {
