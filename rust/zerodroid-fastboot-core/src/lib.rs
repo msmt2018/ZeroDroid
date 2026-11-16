@@ -26,6 +26,7 @@ pub enum FastbootError {
     InvalidSlot,
     SlotSwitchingDisabled,
     ResourceLimit,
+    ResponseTooLarge,
 }
 
 impl fmt::Display for FastbootError {
@@ -214,7 +215,7 @@ impl FastbootSession {
         if policy.max_download_bytes == 0 {
             return Err(FastbootError::DownloadTooLarge);
         }
-        if partitions.len() > 4096 {
+        if partitions.len() > 256 {
             return Err(FastbootError::ResourceLimit);
         }
         for (index, partition) in partitions.iter().enumerate() {
@@ -339,7 +340,11 @@ impl FastbootSession {
                     values.push(format!("partition-size:{}:{:x}", partition.name, partition.capacity_bytes));
                     values.push(format!("partition-type:{}:virtual", partition.name));
                 }
-                values.join("\n")
+                let response = values.join("\n");
+                if response.len() > 64 * 1024 {
+                    return Err(FastbootError::ResponseTooLarge);
+                }
+                response
             }
             _ if name.starts_with("partition-size:") => {
                 let partition_name = &name["partition-size:".len()..];
