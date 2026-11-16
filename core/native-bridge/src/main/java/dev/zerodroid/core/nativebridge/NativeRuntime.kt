@@ -20,6 +20,11 @@ object NativeRuntime {
             "Native host capability probe failed"
         }
         require(values.size == 7) { "Unexpected native host capability payload" }
+        val reportedAbi = values[0]
+        val loadedAbi = abiVersion()
+        require(reportedAbi == loadedAbi) {
+            "Native capability payload ABI $reportedAbi does not match loaded library ABI $loadedAbi"
+        }
         return NativeHostCapabilities(
             abiVersion = values[0],
             architecture = HostArchitecture.fromWireValue(values[1]),
