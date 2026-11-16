@@ -19,7 +19,7 @@ object NativeRuntime {
         val values = checkNotNull(probeHostCapabilitiesRaw()) {
             "Native host capability probe failed"
         }
-        require(values.size == 7 { "Unexpected native host capability payload" }
+        require(values.size == 7) { "Unexpected native host capability payload" }
         return NativeHostCapabilities(
             abiVersion = values[0],
             architecture = HostArchitecture.fromWireValue(values[1]),
