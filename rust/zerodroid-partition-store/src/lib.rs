@@ -311,6 +311,9 @@ mod tests {
             if *expected != expected_size || data.len() as u64 != expected_size {
                 return Err(StoreError::IncompleteImage);
             }
+            if expected_sha256 != [0; 32] {
+                return Err(StoreError::DigestMismatch);
+            }
             Ok(())
         }
 
@@ -373,6 +376,16 @@ mod tests {
             assert_eq!(tx.commit([0; 32]), Err(StoreError::BackendFailure));
         }
         assert_eq!(store.partitions["boot_a"], vec![8; 8]);
+        assert!(store.staging.is_empty());
+    }
+
+    #[test]
+    fn digest_mismatch_aborts_staging_and_preserves_old_partition() {
+        let mut store = MemoryStore::with_partition("boot_a", vec![0xaa; 8]);
+        let mut tx = FlashTransaction::begin(&mut store, VmId(9), 7, "boot_a", 2, policy()).unwrap();
+        tx.write_chunk(0, &[1, 2]).unwrap();
+        assert_eq!(tx.commit([1; 32]), Err(StoreError::DigestMismatch));
+        assert_eq!(store.partitions["boot_a"], vec![0xaa; 8]);
         assert!(store.staging.is_empty());
     }
 
