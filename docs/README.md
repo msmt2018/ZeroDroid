@@ -53,6 +53,7 @@
 45. [Virtual Fastboot、Guest Bootloader 与虚拟分区刷写契约](45-virtual-fastboot-and-guest-flash-architecture.md)
 46. [Guest 虚拟分区存储与刷写事务核心](46-guest-partition-store-and-flash-transaction-core.md)
 47. [Guest 虚拟块设备核心契约](47-guest-virtual-block-device-core.md)
+48. [Guest GPT 磁盘布局与分区地址映射](48-guest-gpt-disk-layout-runtime.md)
 
 ## 设计基线
 
