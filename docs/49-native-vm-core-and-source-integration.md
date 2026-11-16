@@ -32,9 +32,11 @@ The backend interface owns create/start/stop/destroy and state reconciliation. F
 - Explicit CREATED/PREFLIGHT/PREPARED/STARTING/RUNNING/STOPPING/STOPPED/FAILED/DESTROYED states.
 - Monotonic state revision and capability-gated backend creation.
 - Host tests using a test-only backend.
+- A portable Guest GPA layout validator with bounded region count, checked end arithmetic, sorted non-overlap validation, RAM total accounting, per-region permissions and single-region range resolution. Failed rebuilds preserve the previous valid layout.
+- The Android Native CMake target now emits the shared `libzerodroid_vm.so`; the JNI facade remains a separate `libzerodroid_jni.so`.
 - Rust validation of bounded memory regions, alignment, checked GPA arithmetic, non-overlap and RAM-size consistency.
 
-The current C ABI/JNI does not yet expose this VM controller. Production AVF and authorized-KVM backend implementations remain unimplemented. A /dev/kvm probe alone is not sufficient to create a usable Android VM.
+The current C ABI/JNI does not yet expose this VM controller. The shared-library conversion packages the runtime foundation as a loadable `.so`, but does not make VM create/start operations available without a production backend. Production AVF and authorized-KVM backend implementations remain unimplemented. A /dev/kvm probe alone is not sufficient to create a usable Android VM.
 
 ## Upstream source acquisition
 
