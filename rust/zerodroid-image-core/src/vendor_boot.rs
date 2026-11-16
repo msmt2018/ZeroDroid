@@ -588,6 +588,33 @@ mod tests {
     }
 
     #[test]
+    fn boot_material_set_accepts_init_boot_when_boot_ramdisk_is_empty() {
+        let boot_data = vec![0_u8; 8192];
+        let mut boot = synthetic_boot_index();
+        boot.header.ramdisk_size = 0;
+        boot.ramdisk = 8192..8192;
+        boot.total_indexed_bytes = 8192;
+
+        let init_data = vec![0_u8; 8192];
+        let init = crate::InitBootImageIndex {
+            header: crate::AndroidBootHeaderV3V4 {
+                header_version: 4, header_size: 1584, kernel_size: 0,
+                ramdisk_size: 4096, os_version: 0, signature_size: 0,
+            },
+            header_page: 0..4096,
+            ramdisk: 4096..8192,
+            boot_signature: None,
+            total_indexed_bytes: 8192,
+        };
+        let set = build_boot_material_set(
+            &boot_data, &boot, Some((&init_data, &init)), None, 8,
+        ).unwrap();
+        assert!(set.has_init_boot);
+        assert!(!set.entries.iter().any(|entry| entry.kind == BootMaterialKind::BootRamdisk));
+        assert!(set.entries.iter().any(|entry| entry.kind == BootMaterialKind::InitRamdisk));
+    }
+
+    #[test]
     fn boot_material_set_rejects_invalid_init_boot_semantics() {
         let boot_data = vec![0_u8; 9216];
         let init_data = vec![0_u8; 8192];
