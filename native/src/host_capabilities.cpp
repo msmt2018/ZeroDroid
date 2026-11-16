@@ -8,6 +8,7 @@
 
 namespace {
 constexpr unsigned long kvm_get_api_version = _IO(0xAE, 0x00);
+constexpr unsigned long kvm_create_vm = _IO(0xAE, 0x01);
 constexpr int expected_kvm_api_version = 12;
 
 void clear_error(zdroid_error_info* error) noexcept {
@@ -83,5 +84,33 @@ extern "C" ZDROID_API zdroid_status zdroid_host_probe_capabilities(
     out_capabilities->kvm_state = api_version == expected_kvm_api_version
         ? ZDROID_KVM_PROBE_AVAILABLE
         : ZDROID_KVM_PROBE_INCOMPATIBLE;
+
+    if (api_version != expected_kvm_api_version) {
+        out_capabilities->vm_create_state = ZDROID_KVM_PROBE_INCOMPATIBLE;
+        return ZDROID_STATUS_OK;
+    }
+
+    /*
+     * Opening /dev/kvm and KVM_GET_API_VERSION do not prove VM creation
+     * permission. Create a temporary empty VM and close it immediately.
+     * This does not create a vCPU or start a guest.
+     */
+    const int vm_fd = ioctl(fd, kvm_create_vm, 0UL);
+    if (vm_fd < 0) {
+        const int create_error = errno;
+        out_capabilities->vm_create_errno = create_error;
+        if (create_error == EACCES || create_error == EPERM) {
+            out_capabilities->vm_create_state = ZDROID_KVM_PROBE_ACCESS_DENIED;
+        } else if (create_error == ENODEV || create_error == ENOSYS || create_error == EOPNOTSUPP) {
+            out_capabilities->vm_create_state = ZDROID_KVM_PROBE_UNAVAILABLE;
+        } else if (create_error == EINVAL) {
+            out_capabilities->vm_create_state = ZDROID_KVM_PROBE_INCOMPATIBLE;
+        } else {
+            out_capabilities->vm_create_state = ZDROID_KVM_PROBE_ERROR;
+        }
+    } else {
+        close(vm_fd);
+        out_capabilities->vm_create_state = ZDROID_KVM_PROBE_AVAILABLE;
+    }
     return ZDROID_STATUS_OK;
 }
