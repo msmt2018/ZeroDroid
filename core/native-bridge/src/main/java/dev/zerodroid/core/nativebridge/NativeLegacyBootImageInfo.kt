@@ -21,11 +21,11 @@ data class NativeLegacyBootImageInfo(
     init {
         require(headerVersion in 0..2)
         require(headerSize > 0)
-        require(pageSize >= 2048 && pageSize <= 65536 && pageSize and (pageSize - 1) == 0)
+        require(pageSize >= 2048 && pageSize <= 65536 && Integer.bitCount(pageSize) == 1)
         require(kernelOffset >= 0 && kernelSize > 0)
         require(ramdiskOffset >= 0 && ramdiskSize >= 0)
         require(secondOffset >= 0 && secondSize >= 0)
         require(recoveryDtboSize >= 0 && dtbSize >= 0)
-        require(totalIndexedBytes >= kernelOffset + kernelSize)
+        require(totalIndexedBytes >= kernelOffset && kernelSize <= totalIndexedBytes - kernelOffset)
     }
 }
