@@ -290,6 +290,19 @@ mod tests{
   assert!(parse_android_sparse_image(&v,budget(),8192).is_ok());
  }
 
+ #[test]fn crc32_repeat_matches_bytewise_reference(){
+  for pattern in [&[0_u8][..],&[1_u8,2,3,4][..],&[0xa5_u8,0x5a,0x11][..]]{
+   for count in 0_u64..257{
+    let mut expected=!0_u32;
+    for index in 0..count{let offset=(index as usize)%pattern.len();expected=crc32_update(expected,&pattern[offset..offset+1]);}
+    assert_eq!(crc32_repeat(!0_u32,pattern,count),expected,"pattern={pattern:?}, count={count}");
+   }
+  }
+ }
+ #[test]fn crc32_repeat_handles_multi_gigabyte_sparse_runs_in_logarithmic_work(){
+  assert_eq!(crc32_repeat(!0_u32,&[0],4_u64*1024*1024*1024),!0xd202_ef8d_u32);
+  assert_eq!(crc32_repeat(!0_u32,&[0x12,0x34,0x56,0x78],4_u64*1024*1024*1024),!0xe369_2abd_u32);
+ }
  #[test]fn boot_v3_indexes_kernel_and_ramdisk_without_copying(){
   let mut v=vec![0_u8;8192+4096];v[..8].copy_from_slice(b"ANDROID!");v[8..12].copy_from_slice(&4096_u32.to_le_bytes());v[12..16].copy_from_slice(&1024_u32.to_le_bytes());v[20..24].copy_from_slice(&1580_u32.to_le_bytes());v[40..44].copy_from_slice(&3_u32.to_le_bytes());
   let p=parse_android_boot_image_v3_v4(&v,budget(),8192).unwrap();assert_eq!(p.kernel,4096..8192);assert_eq!(p.ramdisk,8192..9216);assert_eq!(p.boot_signature,None);
