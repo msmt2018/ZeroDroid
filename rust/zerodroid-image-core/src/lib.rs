@@ -195,7 +195,7 @@ pub fn parse_android_boot_image_v3_v4(data:&[u8],budget:ParseBudget,max_payload_
  if data.get(24..40).ok_or(ParseError::OutOfBounds)?.iter().any(|b|*b!=0){return Err(ParseError::InvalidBootHeader)}
  let header_version=u32le(data,40)?;
  let expected_header_size=match header_version{3=>BOOT_V3_HEADER_SIZE,4=>BOOT_V4_HEADER_SIZE,_=>return Err(ParseError::UnsupportedBootHeaderVersion)};
- if kernel_size==0||ramdisk_size==0{return Err(ParseError::InvalidBootHeader)}
+ if kernel_size==0{return Err(ParseError::InvalidBootHeader)}
  if usize::try_from(header_size).map_err(|_|ParseError::IntegerOverflow)?!=expected_header_size{return Err(ParseError::InvalidBootHeader)}
  if data.len()<expected_header_size{return Err(ParseError::OutOfBounds)}
  let signature_size=if header_version==4{u32le(data,1580)?}else{0};
