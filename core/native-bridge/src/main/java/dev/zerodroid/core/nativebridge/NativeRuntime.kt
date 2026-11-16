@@ -5,6 +5,34 @@ object NativeRuntime {
     init { System.loadLibrary("zerodroid_jni") }
 
     external fun abiVersion(): Int
+    private external fun nativeAcquireSurface(surface: android.view.Surface): LongArray?
+    private external fun nativeQuerySurface(handle: Long): LongArray?
+    private external fun nativeReleaseSurface(handle: Long): Boolean
+
+    /** Acquires one owned ANativeWindow reference from [surface]. */
+    fun acquireSurface(surface: android.view.Surface): NativeSurfaceLease {
+        val values = nativeAcquireSurface(surface)
+            ?: error("Failed to acquire Android native Surface")
+        require(values.size == 4) { "Unexpected native Surface metrics payload" }
+        val metrics = NativeSurfaceMetrics(
+            leaseHandle = values[0],
+            widthPixels = values[1].toInt(),
+            heightPixels = values[2].toInt(),
+            pixelFormat = values[3].toInt()
+        )
+        return NativeSurfaceLease(metrics.leaseHandle, metrics)
+    }
+
+    internal fun querySurface(handle: Long): NativeSurfaceMetrics {
+        val values = nativeQuerySurface(handle)
+            ?: error("Failed to query native Surface")
+        require(values.size == 4) { "Unexpected native Surface metrics payload" }
+        return NativeSurfaceMetrics(values[0], values[1].toInt(), values[2].toInt(), values[3].toInt())
+    }
+
+    internal fun releaseSurface(handle: Long) {
+        check(nativeReleaseSurface(handle)) { "Native Surface lease was already released or became stale" }
+    }
     private external fun probeHostCapabilitiesRaw(): IntArray?
 
     /**
