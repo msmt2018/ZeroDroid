@@ -25,14 +25,15 @@ Rust crate `zerodroid-fastboot-core` 提供无 unsafe、平台无关的协议核
 - 有界 ASCII 命令解析，限制命令长度；
 - 解析 getvar、download、flash、erase、set_active、reboot、reboot-bootloader 和 continue；
 - download 长度必须是 8 位十六进制值，且受策略上限约束；
-- 下载缓冲区预留前校验大小，逐块接收并拒绝超长数据，flash 必须等待精确长度完整；
+- 下载不把镜像缓存在进程 RAM：协议核心发放 download token 和连续写入 reservation，传输层将数据流写入该 VM 的私有 staging object，持久化成功后再确认偏移；flash 必须等待精确长度完整；
 - partition 名称限制为小写 ASCII 字母、数字、下划线、连字符和点，拒绝路径、斜线、大小写混淆；
 - flash/erase 只能访问显式 PartitionDescriptor allowlist；
 - 镜像大小不得超过虚拟分区容量；
+- 分区目录条目数和 getvar 响应长度均有硬上限；
 - slot 切换必须由策略显式启用；未启用时返回拒绝；
 - getvar 只报告虚拟分区信息，不探测或泄露宿主物理分区。
 
-协议核心输出 FlashPlan/ErasePlan。它们是待执行的操作描述，不代表分区已被修改。
+协议核心输出 FlashPlan/ErasePlan。FlashPlan 只携带 session download token 与镜像长度，不携带整份镜像字节；传输层必须将 token 绑定到不可跨 VM 访问的临时存储对象。它们是待执行的操作描述，不代表分区已被修改。
 
 ## 3. 分区写入事务（下一阶段实现要求）
 
@@ -88,7 +89,7 @@ pvmfw 是 AVF pVM 信任链组件，不是通用虚拟 Bootloader。普通 VM �
 
 已实现：
 - 有界 Fastboot 命令 parser；
-- download 长度限制和分块完整性状态；
+- download 长度限制、单调 token、连续 offset reservation 与分块确认状态，不在协议核心中缓存整份镜像；
 - 虚拟分区 allowlist、容量约束、flash/erase plan；
 - getvar 虚拟分区信息；
 - 显式 slot switching policy；
