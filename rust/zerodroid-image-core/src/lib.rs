@@ -40,10 +40,69 @@ fn crc32_update(mut crc:u32, bytes:&[u8])->u32{
  for &byte in bytes{let index=((crc^u32::from(byte))&0xff) as usize;crc=(crc>>8)^CRC32_TABLE[index];}
  crc
 }
-fn crc32_repeat(mut crc:u32, pattern:&[u8], count:u64)->u32{
- if pattern.is_empty(){return crc}
- for i in 0..count{crc=crc32_update(crc,&pattern[(i as usize)%pattern.len()..(i as usize)%pattern.len()+1]);}
- crc
+fn gf2_matrix_times(matrix:&[u32;32],mut vector:u32)->u32{
+ let mut sum=0_u32;
+ let mut index=0_usize;
+ while vector!=0{
+  if vector&1!=0{sum^=matrix[index];}
+  vector>>=1;
+  index+=1;
+ }
+ sum
+}
+fn gf2_matrix_square(square:&mut [u32;32],matrix:&[u32;32]){
+ for n in 0..32{square[n]=gf2_matrix_times(matrix,matrix[n]);}
+}
+/// Combines two finalized IEEE CRC-32 values without reading either byte stream again.
+fn crc32_combine(mut crc1:u32,crc2:u32,mut second_len:u64)->u32{
+ if second_len==0{return crc1}
+ let mut odd=[0_u32;32];
+ let mut even=[0_u32;32];
+ odd[0]=0xedb8_8320;
+ let mut row=1_u32;
+ for slot in odd.iter_mut().skip(1){*slot=row;row<<=1;}
+ gf2_matrix_square(&mut even,&odd);
+ gf2_matrix_square(&mut odd,&even);
+ loop{
+  gf2_matrix_square(&mut even,&odd);
+  if second_len&1!=0{crc1=gf2_matrix_times(&even,crc1);}
+  second_len>>=1;
+  if second_len==0{break}
+  gf2_matrix_square(&mut odd,&even);
+  if second_len&1!=0{crc1=gf2_matrix_times(&odd,crc1);}
+  second_len>>=1;
+  if second_len==0{break}
+ }
+ crc1^crc2
+}
+/// Applies a repeated pattern in O(log(count)) CRC-combine operations and constant memory.
+fn crc32_repeat(mut crc_state:u32,pattern:&[u8],count:u64)->u32{
+ if pattern.is_empty()||count==0{return crc_state}
+ let pattern_len=pattern.len() as u64;
+ let repetitions=count/pattern_len;
+ let remainder=(count%pattern_len) as usize;
+ if repetitions!=0{
+  let mut repeated_crc=0_u32;
+  let mut block_crc=!crc32_update(!0_u32,pattern);
+  let mut block_len=pattern_len;
+  let mut remaining=repetitions;
+  while remaining!=0{
+   if remaining&1!=0{
+    repeated_crc=crc32_combine(repeated_crc,block_crc,block_len);
+   }
+   remaining>>=1;
+   if remaining!=0{
+    block_crc=crc32_combine(block_crc,block_crc,block_len);
+    block_len=block_len.saturating_mul(2);
+   }
+  }
+  let combined=crc32_combine(!crc_state,repeated_crc,repetitions.saturating_mul(pattern_len));
+  crc_state=!combined;
+ }
+ if remainder!=0{
+  crc_state=crc32_update(crc_state,&pattern[..remainder]);
+ }
+ crc_state
 }
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
