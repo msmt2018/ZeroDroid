@@ -54,6 +54,7 @@
 46. [Guest 虚拟分区存储与刷写事务核心](46-guest-partition-store-and-flash-transaction-core.md)
 47. [Guest 虚拟块设备核心契约](47-guest-virtual-block-device-core.md)
 48. [Guest GPT 磁盘布局与分区地址映射](48-guest-gpt-disk-layout-runtime.md)
+49. [Guest Dynamic Partition 运行时映射](49-guest-dynamic-partition-runtime.md)
 
 ## 设计基线
 
