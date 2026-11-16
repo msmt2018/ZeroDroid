@@ -25,7 +25,7 @@ pub const VIRTIO_INPUT_EVENT_SIZE: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputError {
-    InvalidDimensions, InvalidCoordinate, InvalidPressure, TooManyPointers,
+    InvalidDimensions, InvalidPointerId, InvalidCoordinate, InvalidPressure, TooManyPointers,
     DuplicatePointer, UnknownPointer, IncompletePointerFrame, InvalidKeyCode,
     TrackingIdExhausted,
 }
@@ -104,7 +104,7 @@ impl VirtioInputEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct ActivePointer { host_id: i32, tracking_id: i32 }
+struct ActivePointer { host_id: i32 }
 
 #[derive(Debug, Clone)]
 pub struct MultiTouchNormalizer {
@@ -121,6 +121,7 @@ impl MultiTouchNormalizer {
         self.slots.iter().filter(|slot| slot.is_some()).count()
     }
     pub fn pointer_down(&mut self, sample: PointerSample) -> Result<Vec<VirtioInputEvent>, InputError> {
+        if sample.pointer_id < 0 { return Err(InputError::InvalidPointerId); }
         let x = self.config.map_x(sample.x)?;
         let y = self.config.map_y(sample.y)?;
         let pressure = self.config.map_pressure(sample.pressure)?;
@@ -130,7 +131,7 @@ impl MultiTouchNormalizer {
         let next = self.next_tracking_id.checked_add(1).ok_or(InputError::TrackingIdExhausted)?;
         let was_empty = self.active_pointer_count() == 0;
         self.next_tracking_id = next;
-        self.slots[slot] = Some(ActivePointer { host_id: sample.pointer_id, tracking_id });
+        self.slots[slot] = Some(ActivePointer { host_id: sample.pointer_id });
 
         let mut events = Vec::with_capacity(8);
         push_abs(&mut events, ABS_MT_SLOT, slot as i32);
@@ -151,6 +152,7 @@ impl MultiTouchNormalizer {
         let mut seen = [false; MAX_POINTERS];
         let mut mapped = Vec::with_capacity(samples.len());
         for sample in samples {
+            if sample.pointer_id < 0 { return Err(InputError::InvalidPointerId); }
             let slot = self.find_slot(sample.pointer_id).ok_or(InputError::UnknownPointer)?;
             if seen[slot] { return Err(InputError::DuplicatePointer); }
             seen[slot] = true;
@@ -286,10 +288,11 @@ mod tests {
         assert_eq!(input.active_pointer_count(), 1);
     }
     #[test]
-    fn rejects_non_finite_input_and_invalid_key_code() {
+    fn rejects_non_finite_input_negative_pointer_id_and_invalid_key_code() {
         let mut input = normalizer();
         assert_eq!(input.pointer_down(PointerSample { pointer_id: 1, x: f32::NAN, y: 0.0, pressure: 1.0 }),
             Err(InputError::InvalidCoordinate));
+        assert_eq!(input.pointer_down(PointerSample { pointer_id: -1, x: 0.0, y: 0.0, pressure: 1.0 }), Err(InputError::InvalidPointerId));
         assert_eq!(key_event(0, true), Err(InputError::InvalidKeyCode));
     }
     #[test]
