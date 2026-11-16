@@ -8,6 +8,8 @@
 
 use core::fmt;
 
+pub mod sync;
+
 pub const MAX_DISPLAY_DIMENSION: u32 = 16_384;
 pub const MAX_BUFFER_BYTES: u64 = 512 * 1024 * 1024;
 pub const MAX_DAMAGE_RECTS: usize = 64;
@@ -19,7 +21,7 @@ pub enum GraphicsError {
     ArithmeticOverflow, InvalidStride, InvalidBufferRange, BufferTooLarge,
     InvalidDamage, TooManyDamageRects, InvalidGeneration, InvalidSequence,
     InvalidQueueCapacity, QueueFull, QueueEmpty, DuplicateBuffer, UnknownBuffer,
-    BufferBusy, InvalidBufferState, InvalidBufferId, LeaseIdExhausted, InvalidBufferId, InvalidFenceId, LeaseIdExhausted,
+    BufferBusy, InvalidBufferState, InvalidBufferId, LeaseIdExhausted, InvalidFenceId,
 }
 impl fmt::Display for GraphicsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{self:?}") }
