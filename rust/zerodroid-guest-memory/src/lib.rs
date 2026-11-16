@@ -3,8 +3,8 @@
 //! Bounded, sequential image-to-Guest-memory loading primitives.
 //!
 //! This crate does not allocate Guest RAM or map host pages. A platform
-//! backend supplies the source reader and GPA writer. Loading is chunked and
-//! reports partial progress because generic backend writes cannot be rolled back.
+//! backend supplies the source reader and GPA writer. Loading is chunked. If a
+//! read/write fails, the caller must discard or reset the partially initialized VM.
 
 use zerodroid_vm_spec_core::{boot_plan::GuestBootPlan, GuestMachineSpec};
 
