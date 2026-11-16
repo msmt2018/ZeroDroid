@@ -281,6 +281,7 @@ pub enum BootMaterialKind {
     InitRamdisk,
     InitBootSignature,
     VendorRamdisk,
+    VendorRamdiskFragment,
     DeviceTreeBlob,
     VendorRamdiskTable,
     Bootconfig,
@@ -847,4 +848,34 @@ mod fragment_selection_tests {
             Err(ParseError::InvalidBootHeader)
         );
     }
+}
+
+
+/// Builds selected vendor fragment materials without exposing the containing monolithic
+/// vendor-ramdisk range as a load instruction. The returned entries still borrow source bytes.
+pub fn build_selected_vendor_ramdisk_materials(
+    vendor_boot_data: &[u8],
+    index: &VendorBootImageIndex,
+    target_board_id: &[u32; VENDOR_RAMDISK_BOARD_ID_WORDS],
+    mode: VendorRamdiskBootMode,
+    max_entries: usize,
+) -> Result<Vec<BootMaterialEntry>, BootMaterialError> {
+    if index.total_indexed_bytes > vendor_boot_data.len() as u64 {
+        return Err(BootMaterialError::InvalidImageIndex);
+    }
+    let selected = select_vendor_ramdisk_fragments(index, target_board_id, mode, max_entries)?;
+    let mut materials = Vec::with_capacity(selected.len());
+    for fragment in selected {
+        if fragment.payload.start > fragment.payload.end
+            || fragment.payload.end > vendor_boot_data.len()
+        {
+            return Err(BootMaterialError::InvalidImageIndex);
+        }
+        materials.push(BootMaterialEntry {
+            kind: BootMaterialKind::VendorRamdiskFragment,
+            source: BootMaterialSource::VendorBootImage,
+            range: fragment.payload,
+        });
+    }
+    Ok(materials)
 }
