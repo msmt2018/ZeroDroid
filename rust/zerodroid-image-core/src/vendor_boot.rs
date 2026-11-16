@@ -306,6 +306,7 @@ pub enum BootMaterialError {
     InvalidImageIndex,
     MissingKernel,
     MissingBootRamdisk,
+    MissingRamdisk,
     InvalidInitBootSemantics,
 }
 
@@ -352,9 +353,7 @@ pub fn build_boot_material_set(
     if boot.header.kernel_size == 0 {
         return Err(BootMaterialError::MissingKernel);
     }
-    if boot.header.ramdisk_size == 0 {
-        return Err(BootMaterialError::MissingBootRamdisk);
-    }
+    let has_boot_ramdisk = boot.header.ramdisk_size != 0;
     if boot.total_indexed_bytes > boot_data.len() as u64 {
         return Err(BootMaterialError::InvalidImageIndex);
     }
@@ -362,8 +361,10 @@ pub fn build_boot_material_set(
     let mut entries = Vec::new();
     push_material(&mut entries, BootMaterialKind::Kernel, BootMaterialSource::BootImage,
         boot.kernel.clone(), boot_data.len(), max_entries)?;
-    push_material(&mut entries, BootMaterialKind::BootRamdisk, BootMaterialSource::BootImage,
-        boot.ramdisk.clone(), boot_data.len(), max_entries)?;
+    if has_boot_ramdisk {
+        push_material(&mut entries, BootMaterialKind::BootRamdisk, BootMaterialSource::BootImage,
+            boot.ramdisk.clone(), boot_data.len(), max_entries)?;
+    }
     if let Some(range) = &boot.boot_signature {
         push_material(&mut entries, BootMaterialKind::BootSignature, BootMaterialSource::BootImage,
             range.clone(), boot_data.len(), max_entries)?;
@@ -404,6 +405,14 @@ pub fn build_boot_material_set(
     } else {
         false
     };
+
+    let has_init_ramdisk = init_boot.is_some();
+    let has_vendor_ramdisk = vendor_boot
+        .map(|(_, index)| index.header.vendor_ramdisk_size != 0)
+        .unwrap_or(false);
+    if !has_boot_ramdisk && !has_init_ramdisk && !has_vendor_ramdisk {
+        return Err(BootMaterialError::MissingRamdisk);
+    }
 
     Ok(BootMaterialSet {
         entries,
