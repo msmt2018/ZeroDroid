@@ -144,7 +144,6 @@ mod tests {
     use zerodroid_dynamic_partition_core::DynamicPartitionLayout;
     use zerodroid_image_core::lp_metadata::{
         LpBlockDevice, LpExtent, LpGeometry, LpGroup, LpMetadataIndex, LpPartition,
-        LP_TARGET_LINEAR, LP_TARGET_ZERO,
     };
 
     #[derive(Default)]
@@ -204,8 +203,8 @@ mod tests {
             header_range: 12288..12416, tables_range: 12416..12500,
             partitions: vec![LpPartition { name: "system_a".into(), attributes: 0, first_extent_index: 0, num_extents: 3, group_index: 0, logical_sectors: 24 }],
             extents: vec![
-                LpExtent { num_sectors: 8, target_type: LP_TARGET_LINEAR, target_data: 40, target_source: 0, physical_range_sectors: Some(40..48) },
-                LpExtent { num_sectors: 4, target_type: LP_TARGET_ZERO, target_data: 0, target_source: 0, physical_range_sectors: None },
+                LpExtent { num_sectors: 8, target_type: 0, target_data: 40, target_source: 0, physical_range_sectors: Some(40..48) },
+                LpExtent { num_sectors: 4, target_type: 1, target_data: 0, target_source: 0, physical_range_sectors: None },
                 LpExtent { num_sectors: 12, target_type: LP_TARGET_LINEAR, target_data: 64, target_source: 0, physical_range_sectors: Some(64..76) },
             ],
             groups: vec![LpGroup { name: "default".into(), flags: 0, maximum_size: 0 }],
