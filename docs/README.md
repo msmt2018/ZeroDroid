@@ -53,6 +53,7 @@
 45. [独立图形核心与画质契约](45-independent-graphics-core-and-image-quality-contract.md)
 46. [Android Native Surface 所有权边界](46-android-native-surface-ownership.md)
 47. [Android HardwareBuffer 分配与所有权](47-android-hardware-buffer-allocation-and-ownership.md)
+48. [Android Native Fence FD 生命周期与等待](48-android-native-fence-fd-lifecycle.md)
 
 ## 设计基线
 
