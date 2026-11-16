@@ -1,4 +1,5 @@
 import org.gradle.api.tasks.Exec
+import java.util.Properties
 
 plugins { alias(libs.plugins.android.library) }
 
@@ -32,7 +33,7 @@ val ndkHostTag = when {
     hostOs.contains("win") -> "windows-x86_64"
     else -> "linux-x86_64"
 }
-val localSdkProperties = java.util.Properties().apply {
+val localSdkProperties = Properties().apply {
     val localPropertiesFile = rootProject.file("local.properties")
     if (localPropertiesFile.isFile) {
         localPropertiesFile.inputStream().use { load(it) }
