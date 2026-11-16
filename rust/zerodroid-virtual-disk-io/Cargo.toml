@@ -1,0 +1,13 @@
+[package]
+name = "zerodroid-virtual-disk-io"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Bounded Guest virtual disk I/O routing over GPT/liblp mappings"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+zerodroid-block-core = { path = "../zerodroid-block-core" }
+zerodroid-dynamic-partition-core = { path = "../zerodroid-dynamic-partition-core" }
