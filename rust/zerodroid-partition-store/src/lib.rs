@@ -306,7 +306,7 @@ mod tests {
             Ok(())
         }
 
-        fn verify_staging(&mut self, handle: u64, expected_size: u64, _expected_sha256: [u8; 32]) -> Result<(), StoreError> {
+        fn verify_staging(&mut self, handle: u64, expected_size: u64, expected_sha256: [u8; 32]) -> Result<(), StoreError> {
             let (_, data, expected) = self.staging.get(&handle).ok_or(StoreError::StagingObjectMissing)?;
             if *expected != expected_size || data.len() as u64 != expected_size {
                 return Err(StoreError::IncompleteImage);
