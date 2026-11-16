@@ -45,6 +45,13 @@ name = "zerodroid-storage-journal"
 version = "0.1.0"
 
 [[package]]
+name = "zerodroid-storage-mutation"
+version = "0.1.0"
+dependencies = [
+ "zerodroid-storage-journal",
+]
+
+[[package]]
 name = "zerodroid-sparse-cow-store"
 version = "0.1.0"
 dependencies = [
