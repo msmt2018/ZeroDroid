@@ -56,6 +56,7 @@
 48. [Guest GPT 磁盘布局与分区地址映射](48-guest-gpt-disk-layout-runtime.md)
 49. [Guest Dynamic Partition 运行时映射](49-guest-dynamic-partition-runtime.md)
 50. [Guest Virtual Disk I/O Adapter](50-guest-virtual-disk-io-adapter.md)
+51. [Guest Sparse COW Storage Core](51-guest-sparse-cow-storage-core.md)
 
 ## 设计基线
 
