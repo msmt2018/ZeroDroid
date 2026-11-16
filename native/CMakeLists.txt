@@ -27,8 +27,23 @@ set_target_properties(zerodroid_core PROPERTIES
 )
 
 if(ANDROID)
+    if(NOT ANDROID_ABI STREQUAL "arm64-v8a")
+        message(FATAL_ERROR "ZeroDroid currently supports only ARM64 Android ABI (arm64-v8a)")
+    endif()
+
+    set(ZERODROID_RUST_STATICLIB
+        "${CMAKE_CURRENT_LIST_DIR}/../target/aarch64-linux-android/release/libzerodroid_ffi.a")
+    if(NOT EXISTS "${ZERODROID_RUST_STATICLIB}")
+        message(FATAL_ERROR
+            "Missing Rust ARM64 static library: ${ZERODROID_RUST_STATICLIB}. "
+            "Build rust/zerodroid-ffi for aarch64-linux-android before configuring Android CMake.")
+    endif()
+    add_library(zerodroid_rust_ffi STATIC IMPORTED GLOBAL)
+    set_target_properties(zerodroid_rust_ffi PROPERTIES
+        IMPORTED_LOCATION "${ZERODROID_RUST_STATICLIB}")
+
     add_library(zerodroid_jni SHARED src/jni_bridge.cpp)
-    target_link_libraries(zerodroid_jni PRIVATE zerodroid_core log)
+    target_link_libraries(zerodroid_jni PRIVATE zerodroid_core zerodroid_rust_ffi log)
     target_compile_features(zerodroid_jni PRIVATE cxx_std_20)
 endif()
 
