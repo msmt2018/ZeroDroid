@@ -11,6 +11,8 @@ use core::fmt;
 use std::collections::VecDeque;
 
 pub const MAX_DAMAGE_RECTS: usize = 64;
+pub const MAX_QUEUED_FRAMES: usize = 8;
+pub const MAX_QUEUED_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PixelFormat {
@@ -191,7 +193,8 @@ impl BoundedFrameQueue {
         limits: DisplayLimits,
     ) -> Result<Self, DisplayError> {
         limits.validate()?;
-        if generation == 0 || max_frames == 0 || max_queued_bytes == 0 {
+        if generation == 0 || max_frames == 0 || max_frames > MAX_QUEUED_FRAMES
+            || max_queued_bytes == 0 || max_queued_bytes > MAX_QUEUED_BYTES {
             return Err(DisplayError::InvalidQueueConfig);
         }
         Ok(Self {
