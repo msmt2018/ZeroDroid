@@ -1,0 +1,9 @@
+[package]
+name = "zerodroid-sparse-cow-store"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "VM-scoped bounded sparse copy-on-write page store core"
+
+[dependencies]
+zerodroid-block-core = { path = "../zerodroid-block-core" }
