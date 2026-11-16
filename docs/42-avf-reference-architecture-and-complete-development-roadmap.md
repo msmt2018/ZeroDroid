@@ -302,7 +302,7 @@ MVP-1 不声称完整 Android 桌面、通用 GSI、GPU 加速、pVM 安全认�
 
 根据当前 PR 分支源码和文档：
 - Kotlin Runtime API、VM 模型、能力门控已有基础实现。
-- Native C ABI、JNI 和 /dev/kvm 节点/API 版本探测已有基础实现；它不是 VM create/run backend。
+- Native C ABI、JNI 已提供 /dev/kvm 访问、KVM API 版本和临时 KVM_CREATE_VM 后立即关闭的权限探测；它不创建 vCPU、不注册 Guest 内存，也不是 VM run backend。
 - Rust image core 已有多类镜像/分区解析基础。
 - FDT v16/v17、DTBO external/local fixup、phandle 声明和引用 relocation、overlay fragment merge、symbols merge、owned-tree canonicalization、FDT v17 serialization 和原始 DTBO sequence pipeline 已实现并有测试。
 - DTC 真实 fixture 已纳入 Rust CI。
