@@ -1,24 +1,43 @@
 cmake_minimum_required(VERSION 3.22)
 project(zerodroid_native LANGUAGES C CXX)
+
 option(ZERODROID_BUILD_TESTS "Build host-side native contract tests" ON)
+
+# The C++ VM core is portable and has no Android UI/JNI dependency.
+if(ZERODROID_BUILD_TESTS AND NOT ANDROID)
+    enable_testing()
+endif()
+add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../cpp ${CMAKE_CURRENT_BINARY_DIR}/zerodroid_cpp)
+
 # Host probing is discovery only; it does not authorize or start a guest VM.
-add_library(zerodroid_core STATIC src/status.cpp src/runtime.cpp src/host_capabilities.cpp)
+add_library(zerodroid_core STATIC
+    src/status.cpp
+    src/runtime.cpp
+    src/host_capabilities.cpp
+)
 target_include_directories(zerodroid_core PUBLIC include)
 target_compile_features(zerodroid_core PUBLIC cxx_std_20)
 target_compile_definitions(zerodroid_core PRIVATE ZERODROID_BUILDING_LIBRARY)
-set_target_properties(zerodroid_core PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES POSITION_INDEPENDENT_CODE YES)
+target_link_libraries(zerodroid_core PUBLIC zerodroid_vm_core)
+set_target_properties(zerodroid_core PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN YES
+    POSITION_INDEPENDENT_CODE YES
+)
+
 if(ANDROID)
- add_library(zerodroid_jni SHARED src/jni_bridge.cpp)
- target_link_libraries(zerodroid_jni PRIVATE zerodroid_core log)
- target_compile_features(zerodroid_jni PRIVATE cxx_std_20)
+    add_library(zerodroid_jni SHARED src/jni_bridge.cpp)
+    target_link_libraries(zerodroid_jni PRIVATE zerodroid_core log)
+    target_compile_features(zerodroid_jni PRIVATE cxx_std_20)
 endif()
+
 if(ZERODROID_BUILD_TESTS AND NOT ANDROID)
- enable_testing()
- add_executable(zerodroid_native_contract_tests tests/native_contract_tests.cpp)
- target_link_libraries(zerodroid_native_contract_tests PRIVATE zerodroid_core)
- add_test(NAME zerodroid_native_contract_tests COMMAND zerodroid_native_contract_tests)
- add_executable(zerodroid_c_abi_header_smoke tests/c_abi_header_smoke.c)
- set_target_properties(zerodroid_c_abi_header_smoke PROPERTIES LINKER_LANGUAGE CXX)
- target_link_libraries(zerodroid_c_abi_header_smoke PRIVATE zerodroid_core)
- add_test(NAME zerodroid_c_abi_header_smoke COMMAND zerodroid_c_abi_header_smoke)
+    add_executable(zerodroid_native_contract_tests tests/native_contract_tests.cpp)
+    target_link_libraries(zerodroid_native_contract_tests PRIVATE zerodroid_core)
+    add_test(NAME zerodroid_native_contract_tests COMMAND zerodroid_native_contract_tests)
+
+    add_executable(zerodroid_c_abi_header_smoke tests/c_abi_header_smoke.c)
+    set_target_properties(zerodroid_c_abi_header_smoke PROPERTIES LINKER_LANGUAGE CXX)
+    target_link_libraries(zerodroid_c_abi_header_smoke PRIVATE zerodroid_core)
+    add_test(NAME zerodroid_c_abi_header_smoke COMMAND zerodroid_c_abi_header_smoke)
 endif()
