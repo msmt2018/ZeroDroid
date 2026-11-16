@@ -1,3 +1,3 @@
 [workspace]
 resolver = "2"
-members = ["rust/zerodroid-image-core", "rust/zerodroid-input-core", "rust/zerodroid-display-core", "rust/zerodroid-fastboot-core", "rust/zerodroid-partition-store", "rust/zerodroid-block-core", "rust/zerodroid-disk-layout-core", "rust/zerodroid-dynamic-partition-core", "rust/zerodroid-virtual-disk-io"]
+members = ["rust/zerodroid-image-core", "rust/zerodroid-input-core", "rust/zerodroid-display-core", "rust/zerodroid-fastboot-core", "rust/zerodroid-partition-store", "rust/zerodroid-block-core", "rust/zerodroid-disk-layout-core", "rust/zerodroid-dynamic-partition-core", "rust/zerodroid-virtual-disk-io", "rust/zerodroid-sparse-cow-store"]
