@@ -105,9 +105,6 @@ pub fn merge_bootconfig(
     second: &BootConfig,
     max_entries: usize,
 ) -> Result<BootConfig, BootConfigError> {
-    if first.entries.len().checked_add(second.entries.len()).ok_or(BootConfigError::ResourceLimit)? > max_entries {
-        return Err(BootConfigError::ResourceLimit);
-    }
     let mut merged = first.clone();
     for entry in &second.entries {
         if let Some(existing) = merged.entries.iter().find(|item| item.key == entry.key) {
@@ -185,6 +182,28 @@ mod tests {
         let mut small = budget();
         small.max_items = 1;
         assert_eq!(parse_bootconfig(b"a=1\nb=2\n", small, BootConfigLimits::default()), Err(BootConfigError::ResourceLimit));
+    }
+
+    #[test]
+    fn parses_vendor_bootconfig_tail_from_validated_range() {
+        use crate::vendor_boot::{VendorBootHeaderV3V4, VendorBootImageIndex};
+        let image = b"prefixandroidboot.hardware=demo\n";
+        let index = VendorBootImageIndex {
+            header: VendorBootHeaderV3V4 {
+                header_version: 4, page_size: 4096, kernel_addr: 0, ramdisk_addr: 0,
+                vendor_ramdisk_size: 0, header_size: 2128, dtb_size: 0, dtb_addr: 0,
+                vendor_ramdisk_table_size: 0, vendor_ramdisk_table_entry_num: 0,
+                vendor_ramdisk_table_entry_size: 108, bootconfig_size: 30,
+            },
+            header_page: 0..0, vendor_ramdisk: 0..0, dtb: 0..0,
+            vendor_ramdisk_table: None, bootconfig: Some(6..image.len()),
+            ramdisk_entries: Vec::new(), total_indexed_bytes: image.len() as u64,
+        };
+        let parsed = parse_vendor_bootconfig(
+            image, &index, budget(), BootConfigLimits::default()
+        ).unwrap().unwrap();
+        assert_eq!(parsed.entries[0].key, "androidboot.hardware");
+        assert_eq!(parsed.entries[0].value, "demo");
     }
 
     #[test]
