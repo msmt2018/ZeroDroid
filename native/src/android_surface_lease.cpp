@@ -3,6 +3,7 @@
 #include <android/native_window_jni.h>
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <limits>
