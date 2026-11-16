@@ -231,6 +231,40 @@ mod tests {
     }
 
     #[test]
+    fn discard_and_flush_are_forwarded_to_the_selected_extent_backends() {
+        let p = partition();
+        let backend = MemoryExtentBackend {
+            generation: 3,
+            linear: vec![0x7f; 128 * 1024],
+            zero: vec![0x6e; 24 * 512],
+            ..Default::default()
+        };
+        let mut adapter = MappedPartitionBackend::new(backend, VmId(9), 3, "system_a", &p, 8).unwrap();
+
+        // Crosses from the first linear extent into the zero extent.
+        adapter.discard(VmId(9), 3, 7 * 512, 2 * 512).unwrap();
+        let mut first = vec![0xff; 512];
+        let mut second = vec![0xff; 512];
+        adapter.read_at(VmId(9), 3, 7 * 512, &mut first).unwrap();
+        adapter.read_at(VmId(9), 3, 8 * 512, &mut second).unwrap();
+        assert_eq!(first, vec![0; 512]);
+        assert_eq!(second, vec![0; 512]);
+
+        adapter.flush(VmId(9), 3).unwrap();
+        assert_eq!(adapter.backend.flushes, 1);
+    }
+
+    #[test]
+    fn rejects_requests_outside_partition_and_over_segment_budget() {
+        let p = partition();
+        let backend = MemoryExtentBackend { generation: 3, linear: vec![0; 128 * 1024], zero: vec![0; 24 * 512], ..Default::default() };
+        let mut adapter = MappedPartitionBackend::new(backend, VmId(9), 3, "system_a", &p, 2).unwrap();
+        let mut out = vec![0; 8 * 512];
+        assert_eq!(adapter.read_at(VmId(9), 3, 6 * 512, &mut out), Err(BlockError::OutOfRange));
+        assert_eq!(adapter.read_at(VmId(9), 3, 24 * 512, &mut out[..512]), Err(BlockError::OutOfRange));
+    }
+
+    #[test]
     fn rejects_wrong_vm_and_generation() {
         let p = partition();
         let backend = MemoryExtentBackend { generation: 3, linear: vec![0; 128 * 1024], zero: vec![0; 24 * 512], ..Default::default() };
