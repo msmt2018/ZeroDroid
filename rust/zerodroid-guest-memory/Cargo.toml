@@ -1,0 +1,9 @@
+[package]
+name = "zerodroid-guest-memory"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Bounded chunked ARM64 Guest image loading interfaces for ZeroDroid"
+
+[dependencies]
+zerodroid-vm-spec-core = { path = "../zerodroid-vm-spec-core" }
