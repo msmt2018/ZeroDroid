@@ -147,7 +147,8 @@ pub fn parse_vendor_bootconfig(
     }
     parse_bootconfig(&image[range.clone()], budget, limits).map(Some)
 }
-\n#[cfg(test)]
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
