@@ -1,6 +1,7 @@
 #include <jni.h>
 
 #include <cerrno>
+#include <cstddef>
 #include <chrono>
 #include <cstdint>
 #include <fcntl.h>
@@ -9,6 +10,7 @@
 #include <poll.h>
 #include <unordered_map>
 #include <unistd.h>
+#include <utility>
 
 namespace {
 class OwnedFenceFd {
