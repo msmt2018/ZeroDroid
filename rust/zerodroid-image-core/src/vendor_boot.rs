@@ -836,6 +836,23 @@ mod fragment_selection_tests {
     }
 
     #[test]
+    fn selected_materials_reference_only_selected_fragment_payloads() {
+        let image = v4_image();
+        let index = parse_vendor_boot_image_v3_v4(
+            &image,
+            ParseBudget { max_input_bytes: 1 << 20, max_items: 16, max_nesting_depth: 4 },
+            4096,
+        ).unwrap();
+        let materials = build_selected_vendor_ramdisk_materials(
+            &image, &index, &board(0x1234), VendorRamdiskBootMode::Normal, 2
+        ).unwrap();
+        assert_eq!(materials.len(), 1);
+        assert_eq!(materials[0].kind, BootMaterialKind::VendorRamdiskFragment);
+        assert_eq!(materials[0].source, BootMaterialSource::VendorBootImage);
+        assert_eq!(materials[0].range, 4096..4352);
+    }
+
+    #[test]
     fn parser_rejects_unknown_fragment_type() {
         let mut image = v4_image();
         image[12_288 + 8..12_288 + 12].copy_from_slice(&99_u32.to_le_bytes());
