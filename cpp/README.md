@@ -6,6 +6,13 @@ This directory contains ZeroDroid-authored portable C++ VM runtime code. Android
 
 The native CMake project includes this directory as zerodroid_vm_core. It is built for host contract tests and Android NDK targets.
 
+## Current core modules
+
+- `vm.*`: backend-injected VM lifecycle controller and capability gate.
+- `guest_memory_layout.*`: bounded Guest physical-address region map, overlap/overflow checks, permission validation and GPA range resolution. It is a layout contract only; it does not allocate RAM or install Stage-2 mappings.
+
+The Android Native CMake target links this portable core into `libzerodroid_vm.so`; the JNI facade is emitted separately as `libzerodroid_jni.so`.
+
 ## Rules
 
 - No Activity, Compose, JNI or Android framework types in portable core headers.
