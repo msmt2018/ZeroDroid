@@ -9,6 +9,7 @@ object NativeRuntime {
     external fun abiVersion(): Int
     private external fun probeHostCapabilitiesRaw(): IntArray?
     private external fun parseArm64KernelImageRaw(buffer: ByteBuffer, maxInputBytes: Long, maxImageBytes: Long): LongArray?
+    private external fun parseLegacyBootImageRaw(buffer: ByteBuffer, maxInputBytes: Long, maxPayloadBytes: Long): LongArray?
 
     /**
      * Probes the process-visible KVM device interface.
@@ -67,5 +68,42 @@ object NativeRuntime {
             flags = values[5],
             imageOffset = values[6],
             imageLength = values[7]
+        )
+    }
+
+    /**
+     * Parses Android boot.img v0-v2 through the Rust image core.
+     * The direct buffer's current remaining slice is borrowed synchronously and not copied.
+     */
+    fun parseLegacyBootImage(
+        buffer: ByteBuffer,
+        maxInputBytes: Long = 512L * 1024L * 1024L,
+        maxPayloadBytes: Long = 512L * 1024L * 1024L
+    ): NativeLegacyBootImageInfo {
+        require(buffer.isDirect) { "Legacy boot image parsing requires a direct ByteBuffer" }
+        require(maxInputBytes > 0 && maxPayloadBytes > 0) { "Image budgets must be positive" }
+        val input = buffer.slice()
+        val values = checkNotNull(parseLegacyBootImageRaw(input, maxInputBytes, maxPayloadBytes)) {
+            "Native Rust legacy boot parser could not access the direct buffer"
+        }
+        require(values.size == 18) { "Unexpected Rust legacy boot parser payload" }
+        val status = values[0].toInt()
+        require(status == 0) { "Legacy boot image rejected by Rust parser (status=$status)" }
+        return NativeLegacyBootImageInfo(
+            headerVersion = values[1].toInt(),
+            headerSize = values[2].toInt(),
+            pageSize = values[3].toInt(),
+            kernelOffset = values[4],
+            kernelSize = values[5],
+            ramdiskOffset = values[6],
+            ramdiskSize = values[7],
+            secondOffset = values[8],
+            secondSize = values[9],
+            recoveryDtboOffset = if (values[14] != 0L) values[10] else null,
+            recoveryDtboSize = values[11],
+            dtbOffset = if (values[15] != 0L) values[12] else null,
+            dtbSize = values[13],
+            dtbAddress = values[16],
+            totalIndexedBytes = values[17]
         )
     }
