@@ -33,9 +33,14 @@ int main() {
     CHECK(host.kvm_state >= ZDROID_KVM_PROBE_AVAILABLE &&
           host.kvm_state <= ZDROID_KVM_PROBE_ERROR);
     CHECK(host.kvm_errno >= 0);
+    CHECK(host.vm_create_state >= ZDROID_KVM_PROBE_UNKNOWN &&
+          host.vm_create_state <= ZDROID_KVM_PROBE_ERROR);
+    CHECK(host.vm_create_errno >= 0);
     if (host.kvm_state == ZDROID_KVM_PROBE_AVAILABLE) {
         CHECK(host.kvm_api_version == 12);
         CHECK(host.kvm_errno == 0);
+        CHECK(host.vm_create_state >= ZDROID_KVM_PROBE_AVAILABLE &&
+              host.vm_create_state <= ZDROID_KVM_PROBE_ERROR);
     }
     if (host.kvm_state == ZDROID_KVM_PROBE_INCOMPATIBLE) {
         CHECK(host.kvm_api_version != 12);
