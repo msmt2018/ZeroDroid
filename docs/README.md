@@ -40,6 +40,7 @@
 32. [VM、ROM、Guest Profile 与虚拟硬件数据结构规范](32-versioned-data-schemas-and-manifests.md)
 33. [Runtime 状态机、事件流与统一错误模型](33-runtime-state-events-and-error-model.md)
 34. [机器可读 Schema 与契约验证](34-machine-readable-schemas-and-validation.md)
+35. [AEmulator 架构研究、兼容性借鉴与 ZeroDroid 原生虚拟化边界](35-aemulator-research-and-native-virtualization-boundaries.md)
 
 ## 设计基线
 
