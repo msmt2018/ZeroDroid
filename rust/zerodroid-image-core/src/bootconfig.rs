@@ -4,6 +4,7 @@
 //! their kernel bootconfig grammar and merge semantics are implemented explicitly.
 
 use crate::ParseBudget;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootConfigError {
@@ -51,6 +52,7 @@ pub fn parse_bootconfig(
         .map_err(|_| BootConfigError::ResourceLimit)?;
     let text = core::str::from_utf8(data).map_err(|_| BootConfigError::InvalidUtf8)?;
     let mut entries: Vec<BootConfigEntry> = Vec::new();
+    let mut seen: BTreeMap<&str, &str> = BTreeMap::new();
     let mut line_count = 0_u32;
 
     for raw_line in text.lines() {
@@ -86,12 +88,13 @@ pub fn parse_bootconfig(
             return Err(BootConfigError::InvalidValue);
         }
 
-        if let Some(existing) = entries.iter().find(|entry| entry.key == key) {
-            if existing.value != value {
+        if let Some(existing) = seen.get(key) {
+            if *existing != value {
                 return Err(BootConfigError::DuplicateKeyConflict);
             }
             continue;
         }
+        seen.insert(key, value);
         entries.push(BootConfigEntry { key: key.to_owned(), value: value.to_owned() });
     }
 
@@ -106,9 +109,11 @@ pub fn merge_bootconfig(
     max_entries: usize,
 ) -> Result<BootConfig, BootConfigError> {
     let mut merged = first.clone();
+    let mut seen: BTreeMap<&str, &str> = first.entries.iter()
+        .map(|entry| (entry.key.as_str(), entry.value.as_str())).collect();
     for entry in &second.entries {
-        if let Some(existing) = merged.entries.iter().find(|item| item.key == entry.key) {
-            if existing.value != entry.value {
+        if let Some(existing) = seen.get(entry.key.as_str()) {
+            if *existing != entry.value {
                 return Err(BootConfigError::DuplicateKeyConflict);
             }
         } else {
@@ -116,6 +121,7 @@ pub fn merge_bootconfig(
                 return Err(BootConfigError::ResourceLimit);
             }
             merged.entries.push(entry.clone());
+            seen.insert(entry.key.as_str(), entry.value.as_str());
         }
     }
     Ok(merged)
