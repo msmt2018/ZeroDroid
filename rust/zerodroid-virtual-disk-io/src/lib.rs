@@ -205,7 +205,7 @@ mod tests {
             extents: vec![
                 LpExtent { num_sectors: 8, target_type: 0, target_data: 40, target_source: 0, physical_range_sectors: Some(40..48) },
                 LpExtent { num_sectors: 4, target_type: 1, target_data: 0, target_source: 0, physical_range_sectors: None },
-                LpExtent { num_sectors: 12, target_type: LP_TARGET_LINEAR, target_data: 64, target_source: 0, physical_range_sectors: Some(64..76) },
+                LpExtent { num_sectors: 12, target_type: 0, target_data: 64, target_source: 0, physical_range_sectors: Some(64..76) },
             ],
             groups: vec![LpGroup { name: "default".into(), flags: 0, maximum_size: 0 }],
             block_devices: vec![LpBlockDevice { first_logical_sector: 40, alignment: 4096, alignment_offset: 0, size: 128 * 1024, partition_name: "super".into(), flags: 0 }],
