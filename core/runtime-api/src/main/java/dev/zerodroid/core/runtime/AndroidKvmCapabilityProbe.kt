@@ -1,7 +1,6 @@
 package dev.zerodroid.core.runtime
 
 import android.os.Build
-import dev.zerodroid.core.nativebridge.HostArchitecture as NativeHostArchitecture
 import dev.zerodroid.core.nativebridge.KvmProbeState
 import dev.zerodroid.core.nativebridge.NativeRuntime
 
