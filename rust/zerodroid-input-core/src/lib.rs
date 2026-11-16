@@ -211,7 +211,7 @@ impl MultiTouchNormalizer {
 pub fn key_event(linux_key_code: u16, pressed: bool) -> Result<Vec<VirtioInputEvent>, InputError> {
     if linux_key_code == 0 { return Err(InputError::InvalidKeyCode); }
     let mut events = Vec::with_capacity(2);
-    push_key(&mut events, linux_key_code, i32::from(pressed));
+    push_key(&mut events, linux_key_code, if pressed { 1 } else { 0 });
     finish_frame(&mut events);
     Ok(events)
 }
