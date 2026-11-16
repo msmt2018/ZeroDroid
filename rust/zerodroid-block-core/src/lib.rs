@@ -127,7 +127,7 @@ impl<B: BlockBackend> GuestBlockDevice<B> {
     }
 
     pub fn read_blocks(&mut self, start_lba: u64, output: &mut [u8]) -> Result<(), BlockError> {
-        let (offset, length) = self.validate_range(start_lba, output.len())?;
+        let (offset, _) = self.validate_range(start_lba, output.len())?;
         self.backend.check_generation(self.vm, self.generation)?;
         self.backend.read_at(self.vm, self.generation, offset, output)
     }
@@ -179,11 +179,11 @@ impl<B: BlockBackend> GuestBlockDevice<B> {
         }
         let block_size = usize::try_from(self.geometry.logical_block_size)
             .map_err(|_| BlockError::InvalidGeometry)?;
-        if byte_len % block_size != 0 {
-            return Err(BlockError::UnalignedBuffer);
-        }
         if byte_len > self.geometry.max_transfer_bytes as usize {
             return Err(BlockError::TransferTooLarge);
+        }
+        if byte_len % block_size != 0 {
+            return Err(BlockError::UnalignedBuffer);
         }
         let blocks = u64::try_from(byte_len / block_size).map_err(|_| BlockError::OutOfRange)?;
         let end = start_lba.checked_add(blocks).ok_or(BlockError::OutOfRange)?;
