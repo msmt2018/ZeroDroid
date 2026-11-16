@@ -40,7 +40,7 @@ This validation does not apply the operations. In particular, it does not guaran
 
 ## Integration status and limitations
 
-The crate depends only on the journal codec. It currently provides typed encode/decode and transaction-scope validation; it is not yet wired into SparseCowStore, and it does not implement replay, snapshots, checkpointing, file I/O, fsync, locking, or Android private-storage persistence. The existing SparseCow backend contract still requires an all-or-nothing durable page batch from a future implementation.
+The crate depends on the journal codec. It provides typed encode/decode, transaction-scope validation, and an in-memory replay planner. `ReplayState::apply_committed_transaction` decodes and applies one committed journal transaction; `ReplayState::replay_report` applies all committed transactions from a `RecoveryReport` to a private candidate state and publishes only if the complete report succeeds. This connects journal recovery to typed metadata reconstruction, but it is not yet wired into SparseCowStore page storage. It does not implement snapshots, checkpointing, file I/O, fsync, locking, or Android private-storage persistence. The existing SparseCow backend contract still requires an all-or-nothing durable page batch from a future implementation.
 
 Tests cover round trips for all operation kinds, invalid identity/capacity/name/page index, exact payload lengths, and mixed VM-generation transaction rejection. Unit tests do not prove storage durability or power-loss recovery.
 
@@ -51,4 +51,4 @@ The crate also exposes `ReplayState`. It accepts decoded committed transactions 
 
 Each transaction is validated against a private copy of its target VM metadata. The copy is published only after every mutation succeeds, so a quota or metadata failure cannot leave a partially applied transaction in the replay index. Replay state exposes only bounded metadata counters; page bytes remain the responsibility of the durable page backend.
 
-This planner is not yet connected to the SparseCowStore backend and does not read journal files, restore page data, persist the replay index, or establish fsync/atomic-file guarantees. The copy-and-validate strategy favors a simple atomic contract at this stage; profiling and a staged-delta implementation are required before treating it as the final high-throughput recovery path.
+This planner is not yet connected to the SparseCowStore backend and does not itself read journal files; it consumes a decoded `RecoveryReport`. It restores metadata allocation indexes only, not page bytes, and does not persist the replay index or establish fsync/atomic-file guarantees. The copy-and-validate strategy favors a simple atomic contract at this stage; profiling and a staged-delta implementation are required before treating it as the final high-throughput recovery path.
