@@ -39,3 +39,13 @@ version = "0.1.0"
 [[package]]
 name = "zerodroid-partition-store"
 version = "0.1.0"
+
+[[package]]
+name = "zerodroid-virtual-disk-io"
+version = "0.1.0"
+dependencies = [
+ "zerodroid-block-core",
+ "zerodroid-dynamic-partition-core",
+ "zerodroid-image-core",
+]
+
