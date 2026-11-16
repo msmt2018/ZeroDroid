@@ -7,6 +7,13 @@ name = "zerodroid-block-core"
 version = "0.1.0"
 
 [[package]]
+name = "zerodroid-disk-layout-core"
+version = "0.1.0"
+dependencies = [
+ "zerodroid-image-core",
+]
+
+[[package]]
 name = "zerodroid-display-core"
 version = "0.1.0"
 
