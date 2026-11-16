@@ -17,10 +17,12 @@ Java_dev_zerodroid_core_nativebridge_NativeRuntime_probeHostCapabilitiesRaw(JNIE
   static_cast<jint>(capabilities.architecture),
   static_cast<jint>(capabilities.kvm_state),
   static_cast<jint>(capabilities.kvm_api_version),
-  static_cast<jint>(capabilities.kvm_errno)
+  static_cast<jint>(capabilities.kvm_errno),
+  static_cast<jint>(capabilities.vm_create_state),
+  static_cast<jint>(capabilities.vm_create_errno)
  };
- jintArray result = env->NewIntArray(5);
+ jintArray result = env->NewIntArray(7);
  if (result == nullptr) return nullptr;
- env->SetIntArrayRegion(result, 0, 5, values);
+ env->SetIntArrayRegion(result, 0, 7, values);
  return result;
 }
