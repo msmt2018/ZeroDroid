@@ -47,6 +47,7 @@
 39. [FDT/DTB 结构索引与 DTBO Overlay 路由元数据](39-fdt-dtb-and-dtbo-overlay-index.md)
 40. [DTBO External/Local Fixup 只读计划](40-dtbo-external-local-fixup-plan.md)
 41. [DTBO Overlay 有界拥有树合并与 FDT v17 序列化](41-dtbo-overlay-merge-owned-tree.md)
+42. [Android AVF 技术基准、ZeroDroid 架构校准与完整开发路线](42-avf-reference-architecture-and-complete-development-roadmap.md)
 
 ## 设计基线
 
