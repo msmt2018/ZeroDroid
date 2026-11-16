@@ -9,6 +9,7 @@ pub const HARD_MAX_BATCH_PAGES: usize = (HARD_MAX_TRANSFER_BYTES as usize / PAGE
 /// Bounds in-memory registry/index growth until durable metadata is implemented.
 pub const HARD_MAX_OBJECTS_PER_VM: usize = 1024;
 pub const HARD_MAX_TRACKED_PAGES_PER_VM: usize = 262_144;
+pub const HARD_MAX_OBJECT_IDS: usize = 65_536;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ObjectId(pub u128);
@@ -16,7 +17,8 @@ pub struct ObjectId(pub u128);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {
     InvalidName, InvalidCapacity, QuotaExceeded, ObjectNotFound,
-    StaleGeneration, TooManyPages, TooManyObjects, IntegerOverflow, BackendFailure,
+    StaleGeneration, TooManyPages, TooManyObjects, TooManyObjectIds,
+    DuplicateObjectId, IntegerOverflow, BackendFailure,
 }
 impl From<StoreError> for BlockError {
     fn from(_: StoreError) -> Self { BlockError::BackendFailure }
@@ -49,11 +51,12 @@ pub struct SparseCowStore<B: SparseCowBackend> {
     vms: BTreeMap<u128, VmMeta>,
     objects: BTreeMap<(u128, String), ObjectMeta>,
     next_object_id: u128,
+    used_object_ids: BTreeSet<u128>,
 }
 
 impl<B: SparseCowBackend> SparseCowStore<B> {
     pub fn new(backend: B) -> Self {
-        Self { backend, vms: BTreeMap::new(), objects: BTreeMap::new(), next_object_id: 1 }
+        Self { backend, vms: BTreeMap::new(), objects: BTreeMap::new(), next_object_id: 1, used_object_ids: BTreeSet::new() }
     }
 
     pub fn register_vm(&mut self, vm: VmId, generation: u64, quota_bytes: u64) -> Result<(), StoreError> {
@@ -72,19 +75,56 @@ impl<B: SparseCowBackend> SparseCowStore<B> {
         Ok(())
     }
 
+    /// Allocates a process-local ID and delegates to the stable-ID insertion path.
     pub fn create_object(&mut self, vm: VmId, generation: u64, name: &str, capacity: u64) -> Result<ObjectId, StoreError> {
+        let id = ObjectId(self.next_object_id);
+        self.create_object_with_id(vm, generation, name, capacity, id)
+    }
+
+    /// Restores or creates an object with its journal-defined stable ID.
+    /// IDs remain reserved after deletion and across VM generations for this store lifetime.
+    pub fn create_object_with_id(
+        &mut self, vm: VmId, generation: u64, name: &str, capacity: u64, id: ObjectId,
+    ) -> Result<ObjectId, StoreError> {
         self.check_vm(vm, generation)?;
         if !valid_name(name) { return Err(StoreError::InvalidName); }
         if capacity == 0 || capacity > HARD_MAX_OBJECT_BYTES { return Err(StoreError::InvalidCapacity); }
+        if id.0 == 0 || self.used_object_ids.contains(&id.0) {
+            return Err(StoreError::DuplicateObjectId);
+        }
+        if self.used_object_ids.len() >= HARD_MAX_OBJECT_IDS {
+            return Err(StoreError::TooManyObjectIds);
+        }
         let key = (vm.0, name.to_owned());
         if self.objects.contains_key(&key) { return Err(StoreError::InvalidName); }
         if self.objects.keys().filter(|(owner, _)| *owner == vm.0).count() >= HARD_MAX_OBJECTS_PER_VM {
             return Err(StoreError::TooManyObjects);
         }
-        let id = ObjectId(self.next_object_id);
-        self.next_object_id = self.next_object_id.checked_add(1).ok_or(StoreError::IntegerOverflow)?;
+        let next = id.0.checked_add(1).ok_or(StoreError::IntegerOverflow)?;
+        self.used_object_ids.insert(id.0);
+        self.next_object_id = self.next_object_id.max(next);
         self.objects.insert(key, ObjectMeta { id, capacity, allocated: BTreeSet::new() });
         Ok(id)
+    }
+
+    /// Deletes an object only after all allocated pages are removed atomically
+    /// by the backend. The ID remains reserved to prevent journal identity reuse.
+    pub fn delete_object(&mut self, vm: VmId, generation: u64, name: &str) -> Result<(), StoreError> {
+        self.check_vm(vm, generation)?;
+        let meta = self.object(vm, name)?.clone();
+        let updates: Vec<_> = meta.allocated.iter().map(|page_index| PageUpdate {
+            object: meta.id, page_index: *page_index, data: None,
+        }).collect();
+        if !updates.is_empty() {
+            self.backend.commit_pages(vm, generation, &updates)?;
+        }
+        self.objects.remove(&(vm.0, name.to_owned())).ok_or(StoreError::ObjectNotFound)?;
+        Ok(())
+    }
+
+    pub fn object_id(&self, vm: VmId, generation: u64, name: &str) -> Result<ObjectId, StoreError> {
+        self.check_vm(vm, generation)?;
+        Ok(self.object(vm, name)?.id)
     }
 
     pub fn read(&mut self, vm: VmId, generation: u64, name: &str, offset: u64, output: &mut [u8]) -> Result<(), StoreError> {
@@ -242,6 +282,37 @@ mod tests {
         s.register_vm(VmId(1), 7, quota).unwrap();
         s.create_object(VmId(1), 7, "super", PAGE_SIZE as u64 * 8).unwrap(); s
     }
+    #[test]
+    fn stable_object_ids_survive_restore_and_cannot_be_reused() {
+        let mut s = SparseCowStore::new(MemoryBackend::default());
+        s.register_vm(VmId(1), 7, PAGE_SIZE as u64 * 2).unwrap();
+        assert_eq!(s.create_object_with_id(VmId(1), 7, "system", PAGE_SIZE as u64, ObjectId(900)).unwrap(), ObjectId(900));
+        assert_eq!(s.object_id(VmId(1), 7, "system").unwrap(), ObjectId(900));
+        assert_eq!(s.create_object_with_id(VmId(1), 7, "duplicate", PAGE_SIZE as u64, ObjectId(900)), Err(StoreError::DuplicateObjectId));
+        assert_eq!(s.create_object(VmId(1), 7, "next", PAGE_SIZE as u64).unwrap(), ObjectId(901));
+    }
+
+    #[test]
+    fn object_delete_removes_pages_atomically_and_reserves_identity() {
+        let mut s = setup(PAGE_SIZE as u64 * 2);
+        let id = s.object_id(VmId(1), 7, "super").unwrap();
+        s.write(VmId(1), 7, "super", 0, &[0x33; PAGE_SIZE]).unwrap();
+        s.delete_object(VmId(1), 7, "super").unwrap();
+        assert_eq!(s.allocated_bytes(VmId(1)), 0);
+        assert_eq!(s.read(VmId(1), 7, "super", 0, &mut [0; 1]), Err(StoreError::ObjectNotFound));
+        assert_eq!(s.create_object_with_id(VmId(1), 7, "again", PAGE_SIZE as u64, id), Err(StoreError::DuplicateObjectId));
+    }
+
+    #[test]
+    fn failed_object_delete_keeps_registry_and_allocation_index() {
+        let mut s = setup(PAGE_SIZE as u64 * 2);
+        s.write(VmId(1), 7, "super", 0, &[0x44; PAGE_SIZE]).unwrap();
+        s.backend.fail_commit = true;
+        assert_eq!(s.delete_object(VmId(1), 7, "super"), Err(StoreError::BackendFailure));
+        assert_eq!(s.allocated_bytes(VmId(1)), PAGE_SIZE as u64);
+        assert_eq!(s.object_id(VmId(1), 7, "super"), Ok(ObjectId(1)));
+    }
+
     #[test]
     fn sparse_zero_reads_and_partial_write_round_trip() {
         let mut s = setup(PAGE_SIZE as u64 * 4);
