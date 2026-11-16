@@ -50,6 +50,7 @@
 42. [Android AVF 技术基准、ZeroDroid 架构校准与完整开发路线](42-avf-reference-architecture-and-complete-development-roadmap.md)
 43. [Android Host 输入到 Guest VirtIO Input 架构](43-android-guest-input-and-virtio-input-architecture.md)
 44. [Guest Display Frame Transport Contract](44-guest-display-frame-transport-contract.md)
+45. [Virtual Fastboot、Guest Bootloader 与虚拟分区刷写契约](45-virtual-fastboot-and-guest-flash-architecture.md)
 
 ## 设计基线
 
