@@ -160,4 +160,43 @@ mod tests {
         assert_eq!(parse_status(ParseError::InvalidMagic), ZDROID_RUST_INVALID_IMAGE);
         assert_eq!(parse_status(ParseError::UnsupportedBootHeaderVersion), ZDROID_RUST_UNSUPPORTED);
     }
+
+    #[test]
+    fn c_abi_parses_direct_arm64_image_bytes() {
+        let mut image = vec![0_u8; 4096];
+        image[8..16].copy_from_slice(&0x80000_u64.to_le_bytes());
+        image[16..24].copy_from_slice(&4096_u64.to_le_bytes());
+        image[56..60].copy_from_slice(&0x644d_5241_u32.to_le_bytes());
+        let mut output = ZdroidArm64KernelImageInfo {
+            struct_size: core::mem::size_of::<ZdroidArm64KernelImageInfo>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: The byte vector and output struct remain alive and valid for the call.
+        let status = unsafe {
+            zdroid_rust_parse_arm64_kernel_image(
+                image.as_ptr(), image.len(), 4096, 4096, &mut output,
+            )
+        };
+        assert_eq!(status, ZDROID_RUST_OK);
+        assert_eq!(output.text_offset, 0x80000);
+        assert_eq!(output.effective_image_size, 4096);
+        assert_eq!(output.image_length, 4096);
+    }
+
+    #[test]
+    fn c_abi_rejects_null_and_undersized_output() {
+        let mut output = ZdroidArm64KernelImageInfo::default();
+        // SAFETY: Null input is explicitly rejected before dereferencing.
+        assert_eq!(
+            unsafe { zdroid_rust_parse_arm64_kernel_image(core::ptr::null(), 64, 64, 64, &mut output) },
+            ZDROID_RUST_INVALID_ARGUMENT
+        );
+        let mut image = [0_u8; 64];
+        output.struct_size = 1;
+        // SAFETY: Input and output pointers refer to live writable buffers.
+        assert_eq!(
+            unsafe { zdroid_rust_parse_arm64_kernel_image(image.as_mut_ptr(), image.len(), 64, 64, &mut output) },
+            ZDROID_RUST_INVALID_ARGUMENT
+        );
+    }
 }
