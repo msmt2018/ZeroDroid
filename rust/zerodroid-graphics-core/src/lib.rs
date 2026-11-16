@@ -8,6 +8,8 @@
 
 use core::fmt;
 
+pub mod sync;
+
 pub const MAX_DISPLAY_DIMENSION: u32 = 16_384;
 pub const MAX_BUFFER_BYTES: u64 = 512 * 1024 * 1024;
 pub const MAX_DAMAGE_RECTS: usize = 64;
@@ -19,7 +21,7 @@ pub enum GraphicsError {
     ArithmeticOverflow, InvalidStride, InvalidBufferRange, BufferTooLarge,
     InvalidDamage, TooManyDamageRects, InvalidGeneration, InvalidSequence,
     InvalidQueueCapacity, QueueFull, QueueEmpty, DuplicateBuffer, UnknownBuffer,
-    BufferBusy, InvalidBufferState,
+    BufferBusy, InvalidBufferState, InvalidBufferId, LeaseIdExhausted, InvalidFenceId,
 }
 impl fmt::Display for GraphicsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{self:?}") }
@@ -207,9 +209,9 @@ pub struct BufferRegistration {
     pub color_space: ColorSpace, pub alpha_mode: AlphaMode,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BufferLease { pub id: BufferId, pub generation: u64 }
+pub struct BufferLease { pub id: BufferId, pub generation: u64, pub lease_id: u64 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BufferState { Available, Queued, InFlight }
+enum BufferState { Available, Queued(u64), InFlight(u64) }
 
 /// Bounded metadata registry. Pixel allocations remain owned by GPU/platform backends.
 #[derive(Debug)]
@@ -217,15 +219,17 @@ pub struct BufferRegistry {
     generation: u64,
     entries: std::collections::BTreeMap<u64, (BufferRegistration, BufferState)>,
     max_entries: usize,
+    next_lease_id: u64,
 }
 impl BufferRegistry {
     pub fn new(generation: u64, max_entries: usize) -> Result<Self, GraphicsError> {
         if generation == 0 { return Err(GraphicsError::InvalidGeneration); }
         if max_entries == 0 || max_entries > 256 { return Err(GraphicsError::InvalidQueueCapacity); }
-        Ok(Self { generation, entries: std::collections::BTreeMap::new(), max_entries })
+        Ok(Self { generation, entries: std::collections::BTreeMap::new(), max_entries, next_lease_id: 1 })
     }
     pub fn register(&mut self, registration: BufferRegistration) -> Result<(), GraphicsError> {
         registration.layout.validate()?;
+        if registration.id.0 == 0 { return Err(GraphicsError::InvalidBufferId); }
         if self.entries.contains_key(&registration.id.0) { return Err(GraphicsError::DuplicateBuffer); }
         if self.entries.len() >= self.max_entries { return Err(GraphicsError::QueueFull); }
         self.entries.insert(registration.id.0, (registration, BufferState::Available));
@@ -234,20 +238,30 @@ impl BufferRegistry {
     pub fn acquire(&mut self, id: BufferId) -> Result<BufferLease, GraphicsError> {
         let (_, state) = self.entries.get_mut(&id.0).ok_or(GraphicsError::UnknownBuffer)?;
         if *state != BufferState::Available { return Err(GraphicsError::BufferBusy); }
-        *state = BufferState::Queued;
-        Ok(BufferLease { id, generation: self.generation })
+        let lease_id = self.next_lease_id;
+        self.next_lease_id = self.next_lease_id.checked_add(1).ok_or(GraphicsError::LeaseIdExhausted)?;
+        *state = BufferState::Queued(lease_id);
+        Ok(BufferLease { id, generation: self.generation, lease_id })
     }
     pub fn mark_in_flight(&mut self, lease: BufferLease) -> Result<(), GraphicsError> {
         if lease.generation != self.generation { return Err(GraphicsError::InvalidGeneration); }
         let (_, state) = self.entries.get_mut(&lease.id.0).ok_or(GraphicsError::UnknownBuffer)?;
-        if *state != BufferState::Queued { return Err(GraphicsError::InvalidBufferState); }
-        *state = BufferState::InFlight;
+        if *state != BufferState::Queued(lease.lease_id) { return Err(GraphicsError::InvalidBufferState); }
+        *state = BufferState::InFlight(lease.lease_id);
         Ok(())
     }
     pub fn release(&mut self, lease: BufferLease) -> Result<(), GraphicsError> {
         if lease.generation != self.generation { return Err(GraphicsError::InvalidGeneration); }
         let (_, state) = self.entries.get_mut(&lease.id.0).ok_or(GraphicsError::UnknownBuffer)?;
-        if *state == BufferState::Available { return Err(GraphicsError::InvalidBufferState); }
+        if *state != BufferState::InFlight(lease.lease_id) { return Err(GraphicsError::InvalidBufferState); }
+        *state = BufferState::Available;
+        Ok(())
+    }
+    /// Cancel a queued frame before it is submitted to the GPU.
+    pub fn cancel_queued(&mut self, lease: BufferLease) -> Result<(), GraphicsError> {
+        if lease.generation != self.generation { return Err(GraphicsError::InvalidGeneration); }
+        let (_, state) = self.entries.get_mut(&lease.id.0).ok_or(GraphicsError::UnknownBuffer)?;
+        if *state != BufferState::Queued(lease.lease_id) { return Err(GraphicsError::InvalidBufferState); }
         *state = BufferState::Available;
         Ok(())
     }
@@ -334,6 +348,30 @@ mod tests {
         assert_eq!(r.unregister(BufferId(7)), Err(GraphicsError::BufferBusy));
         r.release(lease).unwrap(); r.unregister(BufferId(7)).unwrap();
         assert_eq!(r.len(), 0);
+    }
+    #[test]
+    fn old_lease_cannot_release_a_reacquired_buffer() {
+        let mut r = BufferRegistry::new(1, 4).unwrap();
+        r.register(BufferRegistration { id: BufferId(11), layout: layout(),
+            color_space: ColorSpace::Srgb, alpha_mode: AlphaMode::Opaque }).unwrap();
+        let old = r.acquire(BufferId(11)).unwrap();
+        r.mark_in_flight(old).unwrap();
+        r.release(old).unwrap();
+        let current = r.acquire(BufferId(11)).unwrap();
+        r.mark_in_flight(current).unwrap();
+        assert_ne!(old.lease_id, current.lease_id);
+        assert_eq!(r.release(old), Err(GraphicsError::InvalidBufferState));
+        assert_eq!(r.release(current), Ok(()));
+    }
+    #[test]
+    fn queued_buffer_can_be_cancelled_but_not_released_as_completed() {
+        let mut r = BufferRegistry::new(1, 4).unwrap();
+        r.register(BufferRegistration { id: BufferId(12), layout: layout(),
+            color_space: ColorSpace::Srgb, alpha_mode: AlphaMode::Opaque }).unwrap();
+        let lease = r.acquire(BufferId(12)).unwrap();
+        assert_eq!(r.release(lease), Err(GraphicsError::InvalidBufferState));
+        r.cancel_queued(lease).unwrap();
+        assert_eq!(r.acquire(BufferId(12)).unwrap().id, BufferId(12));
     }
     #[test]
     fn stale_lease_is_rejected_after_generation_change() {

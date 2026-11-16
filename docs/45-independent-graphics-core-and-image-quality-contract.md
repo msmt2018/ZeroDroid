@@ -84,6 +84,22 @@ Required tests:
 
 Track output-vs-Guest pixel dimensions, resampling count, format conversions, bytes copied, GPU/CPU time, frame latency, missed VSync, queue depth and buffer lifetime. Image quality must not be traded for an undocumented performance shortcut.
 
-## 8. Implementation status boundary
+## 8. Buffer lease ABA protection and fence timeline
+
+The buffer registry uses a monotonically increasing lease token in addition to buffer ID and display generation. A delayed completion from an earlier use of the same buffer must never release a later use of that buffer (the ABA/reuse hazard).
+
+The lifecycle is explicit:
+- `Available → Queued(lease_id)` when acquired for submission;
+- `Queued(lease_id) → InFlight(lease_id)` only when the backend accepts the submission;
+- `InFlight(lease_id) → Available` only for the matching completion lease;
+- `Queued(lease_id) → Available` through explicit cancellation before submission.
+
+A stale lease, a mismatched lease token, or an attempt to report a queued-but-not-submitted frame as GPU-complete is rejected. Lease IDs are monotonic and checked for integer overflow.
+
+The `sync` module adds a platform-neutral monotonic `FenceTimeline`. A backend reserves a point before submission and reports completion by signaling a previously issued point. Signaling a higher point completes all lower points; foreign timeline IDs, unissued points, zero points and duplicate/regressive signals are rejected.
+
+These are synchronization contracts only. They do not perform blocking waits, signal Linux sync_file fences, create Android native fences, submit GPU work, or prove that a platform fence has actually completed. The Android/GPU backend must map native completion into these contracts only after receiving authoritative completion from the relevant driver/API.
+
+## 9. Implementation status boundary
 
 This change provides validated contracts and unit-test source only. It is not a GLES/Vulkan backend, GPU passthrough, Gralloc implementation, Composer HAL, SurfaceFlinger integration, DMA-BUF import path or real-device image-quality proof. No GPU acceleration or zero-copy claim is made until those layers are implemented and tested on named Android devices and drivers.
