@@ -52,6 +52,7 @@
 44. [Android 应用层：Kotlin、Jetpack Compose 与原生 Material 3](44-android-app-kotlin-jetpack-compose-material3.md)
 45. [独立图形核心与画质契约](45-independent-graphics-core-and-image-quality-contract.md)
 46. [Android Native Surface 所有权边界](46-android-native-surface-ownership.md)
+47. [Android HardwareBuffer 分配与所有权](47-android-hardware-buffer-allocation-and-ownership.md)
 
 ## 设计基线
 

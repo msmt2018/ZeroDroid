@@ -33,6 +33,38 @@ object NativeRuntime {
     internal fun releaseSurface(handle: Long) {
         check(nativeReleaseSurface(handle)) { "Native Surface lease was already released or became stale" }
     }
+    private external fun nativeAllocateHardwareBuffer(width: Int, height: Int, usage: Long): LongArray?
+    private external fun nativeDescribeHardwareBuffer(handle: Long): LongArray?
+    private external fun nativeReleaseHardwareBuffer(handle: Long): Boolean
+
+    /** Allocates a bounded RGBA8 HardwareBuffer for GPU sampling and color output. */
+    fun allocateHardwareBuffer(
+        width: Int,
+        height: Int,
+        usage: Long = HardwareBufferUsage.GPU_SAMPLED_IMAGE or HardwareBufferUsage.GPU_COLOR_OUTPUT
+    ): NativeHardwareBufferLease {
+        val values = nativeAllocateHardwareBuffer(width, height, usage)
+            ?: error("Failed to allocate Android HardwareBuffer")
+        val metrics = values.toHardwareBufferMetrics()
+        return NativeHardwareBufferLease(metrics.leaseHandle, metrics)
+    }
+
+    internal fun describeHardwareBuffer(handle: Long): NativeHardwareBufferMetrics =
+        checkNotNull(nativeDescribeHardwareBuffer(handle)).toHardwareBufferMetrics()
+
+    internal fun releaseHardwareBuffer(handle: Long) {
+        check(nativeReleaseHardwareBuffer(handle)) { "HardwareBuffer lease was already released or became stale" }
+    }
+
+    private fun LongArray.toHardwareBufferMetrics(): NativeHardwareBufferMetrics {
+        require(size == 7) { "Unexpected HardwareBuffer metrics payload" }
+        return NativeHardwareBufferMetrics(
+            leaseHandle = this[0], width = this[1].toInt(), height = this[2].toInt(),
+            layers = this[3].toInt(), format = this[4].toInt(), stride = this[5].toInt(),
+            usage = this[6]
+        )
+    }
+
     private external fun probeHostCapabilitiesRaw(): IntArray?
 
     /**
