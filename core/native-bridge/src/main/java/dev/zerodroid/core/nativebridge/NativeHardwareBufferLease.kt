@@ -2,12 +2,12 @@ package dev.zerodroid.core.nativebridge
 
 /** Android HardwareBuffer usage bits accepted by the native allocation boundary. */
 object HardwareBufferUsage {
-    const val GPU_SAMPLED_IMAGE: Long = 1L shl 8
-    const val GPU_COLOR_OUTPUT: Long = 1L shl 9
+    const val GPU_SAMPLED_IMAGE: Long = 0x100L
+    const val GPU_COLOR_OUTPUT: Long = 0x200L
     const val CPU_READ_RARELY: Long = 2L
     const val CPU_READ_OFTEN: Long = 3L
-    const val CPU_WRITE_RARELY: Long = 1L shl 4
-    const val CPU_WRITE_OFTEN: Long = (1L shl 4) or (1L shl 5)
+    const val CPU_WRITE_RARELY: Long = 0x10L
+    const val CPU_WRITE_OFTEN: Long = 0x30L
 }
 
 /** Immutable allocation metadata returned by AHardwareBuffer_describe(). */
