@@ -17,3 +17,7 @@ version = "0.1.0"
 [[package]]
 name = "zerodroid-input-core"
 version = "0.1.0"
+
+[[package]]
+name = "zerodroid-partition-store"
+version = "0.1.0"
