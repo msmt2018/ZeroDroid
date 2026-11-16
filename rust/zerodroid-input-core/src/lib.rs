@@ -28,6 +28,10 @@ pub enum InputError {
     InvalidDimensions, InvalidPointerId, InvalidCoordinate, InvalidPressure, TooManyPointers,
     DuplicatePointer, UnknownPointer, IncompletePointerFrame, InvalidKeyCode,
     TrackingIdExhausted,
+    InvalidQueueCapacity,
+    QueueFull,
+    QueueClosed,
+    InvalidEventFrame,
 }
 
 impl fmt::Display for InputError {
@@ -207,6 +211,57 @@ impl MultiTouchNormalizer {
     }
 }
 
+
+/// A bounded, frame-atomic queue between the Android adapter and a future VMM transport.
+/// Full queues reject new frames; they never partially enqueue or silently drop transitions.
+#[derive(Debug, Clone)]
+pub struct BoundedInputQueue {
+    frames: std::collections::VecDeque<Vec<VirtioInputEvent>>,
+    capacity_frames: usize,
+    max_events_per_frame: usize,
+    closed: bool,
+}
+
+impl BoundedInputQueue {
+    pub fn new(capacity_frames: usize, max_events_per_frame: usize) -> Result<Self, InputError> {
+        if capacity_frames == 0 || max_events_per_frame < 2 {
+            return Err(InputError::InvalidQueueCapacity);
+        }
+        Ok(Self {
+            frames: std::collections::VecDeque::with_capacity(capacity_frames),
+            capacity_frames,
+            max_events_per_frame,
+            closed: false,
+        })
+    }
+
+    pub fn len(&self) -> usize { self.frames.len() }
+    pub fn is_empty(&self) -> bool { self.frames.is_empty() }
+    pub fn is_closed(&self) -> bool { self.closed }
+
+    pub fn push_frame(&mut self, frame: Vec<VirtioInputEvent>) -> Result<(), InputError> {
+        if self.closed { return Err(InputError::QueueClosed); }
+        if frame.is_empty() || frame.len() > self.max_events_per_frame
+            || frame.last() != Some(&VirtioInputEvent::new(EV_SYN, SYN_REPORT, 0))
+            || frame[..frame.len().saturating_sub(1)].iter()
+                .any(|event| event.event_type == EV_SYN && event.code == SYN_REPORT) {
+            return Err(InputError::InvalidEventFrame);
+        }
+        if self.frames.len() >= self.capacity_frames { return Err(InputError::QueueFull); }
+        self.frames.push_back(frame);
+        Ok(())
+    }
+
+    pub fn pop_frame(&mut self) -> Option<Vec<VirtioInputEvent>> {
+        self.frames.pop_front()
+    }
+
+    pub fn close(&mut self) {
+        self.closed = true;
+        self.frames.clear();
+    }
+}
+
 /// Creates a key press/release frame. Android-to-Linux key mapping belongs in the Android adapter.
 pub fn key_event(linux_key_code: u16, pressed: bool) -> Result<Vec<VirtioInputEvent>, InputError> {
     if linux_key_code == 0 { return Err(InputError::InvalidKeyCode); }
@@ -234,6 +289,31 @@ mod tests {
             guest_abs_max_y: 4095, guest_pressure_max: 255,
         }).unwrap()
     }
+
+    #[test]
+    fn bounded_queue_is_frame_atomic_and_applies_backpressure() {
+        let mut queue = BoundedInputQueue::new(1, 16).unwrap();
+        let frame = key_event(30, true).unwrap();
+        queue.push_frame(frame.clone()).unwrap();
+        assert_eq!(queue.push_frame(frame.clone()), Err(InputError::QueueFull));
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.pop_frame(), Some(frame));
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn bounded_queue_rejects_malformed_frames_and_closes_cleanly() {
+        let mut queue = BoundedInputQueue::new(2, 16).unwrap();
+        assert_eq!(queue.push_frame(Vec::new()), Err(InputError::InvalidEventFrame));
+        assert_eq!(queue.push_frame(vec![VirtioInputEvent::new(EV_KEY, 30, 1)]),
+            Err(InputError::InvalidEventFrame));
+        queue.push_frame(key_event(30, true).unwrap()).unwrap();
+        queue.close();
+        assert!(queue.is_closed());
+        assert!(queue.is_empty());
+        assert_eq!(queue.push_frame(key_event(30, false).unwrap()), Err(InputError::QueueClosed));
+    }
+
     #[test]
     fn maps_coordinates_and_emits_one_report_per_frame() {
         let mut input = normalizer();
