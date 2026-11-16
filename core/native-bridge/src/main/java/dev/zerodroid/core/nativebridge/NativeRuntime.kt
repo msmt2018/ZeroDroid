@@ -65,6 +65,27 @@ object NativeRuntime {
         )
     }
 
+    private external fun nativeImportFenceFd(fd: Int): Long
+    private external fun nativeWaitFence(handle: Long, timeoutMillis: Int): Int
+    private external fun nativeReleaseFence(handle: Long): Boolean
+
+    internal fun importNativeFenceFd(fd: Int): NativeFenceLease {
+        require(fd >= -1) { "Fence fd must be -1 or a valid descriptor" }
+        val handle = nativeImportFenceFd(fd)
+        check(handle > 0L) { "Failed to import native fence fd" }
+        return NativeFenceLease(handle)
+    }
+
+    internal fun waitFence(handle: Long, timeoutMillis: Int): Int =
+        nativeWaitFence(handle, timeoutMillis)
+
+    internal fun releaseFence(handle: Long) {
+        check(nativeReleaseFence(handle)) { "Native fence lease was already released or became stale" }
+    }
+
+    const val FENCE_SIGNALED: Int = 1
+    const val FENCE_TIMEOUT: Int = 0
+
     private external fun probeHostCapabilitiesRaw(): IntArray?
 
     /**
