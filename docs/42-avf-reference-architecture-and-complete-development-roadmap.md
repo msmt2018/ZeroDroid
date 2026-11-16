@@ -323,6 +323,16 @@ MVP-1 不声称完整 Android 桌面、通用 GSI、GPU 加速、pVM 安全认�
 - Guest VINTF/HAL、图形、音频、输入和 Host Bridge 的端到端验证。
 - 真机性能、温度、内存压力和多 VM 稳定性验证。
 
+### 6.3 Guest Input / VirtIO Input 的实现进度
+
+- 新增 `rust/zerodroid-input-core`：纯 Rust、禁止 unsafe 的 Host 输入归一化核心。
+- 已实现固定上限十指触摸槽位、Android pointer ID 到 Guest slot 的独立映射、坐标/压力有限值检查与 Guest ABS 轴缩放。
+- 已实现多指 MOVE 完整帧校验、独立 pointer-up、全量 cancel、BTN_TOUCH 状态维护、Linux key event frame helper 和 8-byte little-endian VirtIO input event 编码。
+- 已有单元测试覆盖槽位稳定性、多指更新、单指释放、取消、非法帧、非有限坐标、非法 pointer ID、容量上限和 wire encoding。
+- 该 crate 目前只完成事件归一化和 payload 编码；尚未实现 Android MotionEvent/KeyEvent adapter、异步有界队列、VirtIO Input feature/config/descriptor queue、IRQ、Manifest/DTB 接线或真机 Guest 驱动验证。
+- Linux uinput 是 Host Kernel 虚拟输入设备接口，不是 Guest VirtIO 设备的替代品。普通 APK 不得假设拥有 /dev/uinput 权限。rust-uinput-sys 仅作为 ioctl/ABI 外部研究参考，不 vendoring、不直接链接。
+- Twoyi 输入/渲染实现只用于理解问题域；不复制其源代码、二进制、生成绑定或实现组织。ZeroDroid 的输入与渲染边界独立实现。
+
 ## 7. CI 与验证体系
 
 1. Static/Schema：JSON Schema、Manifest、ABI layout、version compatibility、license/source manifest。
