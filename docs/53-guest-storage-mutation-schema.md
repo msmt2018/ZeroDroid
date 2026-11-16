@@ -43,3 +43,12 @@ This validation does not apply the operations. In particular, it does not guaran
 The crate depends only on the journal codec. It currently provides typed encode/decode and transaction-scope validation; it is not yet wired into SparseCowStore, and it does not implement replay, snapshots, checkpointing, file I/O, fsync, locking, or Android private-storage persistence. The existing SparseCow backend contract still requires an all-or-nothing durable page batch from a future implementation.
 
 Tests cover round trips for all operation kinds, invalid identity/capacity/name/page index, exact payload lengths, and mixed VM-generation transaction rejection. Unit tests do not prove storage durability or power-loss recovery.
+
+
+## In-memory replay planner
+
+The crate also exposes `ReplayState`. It accepts decoded committed transactions in strictly increasing commit-sequence order and validates their mutations against a bounded in-memory metadata index. It enforces VM generation ownership, object ID/name uniqueness, object/page capacity, per-VM object and tracked-page limits, VM quota, and bounded VM/object-ID counts. A generation change starts a fresh object namespace for that VM.
+
+Each transaction is validated against a private copy of its target VM metadata. The copy is published only after every mutation succeeds, so a quota or metadata failure cannot leave a partially applied transaction in the replay index. Replay state exposes only bounded metadata counters; page bytes remain the responsibility of the durable page backend.
+
+This planner is not yet connected to the SparseCowStore backend and does not read journal files, restore page data, persist the replay index, or establish fsync/atomic-file guarantees. The copy-and-validate strategy favors a simple atomic contract at this stage; profiling and a staged-delta implementation are required before treating it as the final high-throughput recovery path.
