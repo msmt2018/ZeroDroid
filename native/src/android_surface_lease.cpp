@@ -46,11 +46,12 @@ bool allocate_handle(std::uint64_t* out) noexcept {
 }
 
 jlongArray make_metrics(JNIEnv* env, std::uint64_t handle, ANativeWindow* window) {
+    const auto width = ANativeWindow_getWidth(window);
+    const auto height = ANativeWindow_getHeight(window);
+    if (width <= 0 || height <= 0) return nullptr;
     const jlong values[] = {
-        static_cast<jlong>(handle),
-        static_cast<jlong>(ANativeWindow_getWidth(window)),
-        static_cast<jlong>(ANativeWindow_getHeight(window)),
-        static_cast<jlong>(ANativeWindow_getFormat(window))
+        static_cast<jlong>(handle), static_cast<jlong>(width),
+        static_cast<jlong>(height), static_cast<jlong>(ANativeWindow_getFormat(window))
     };
     jlongArray result = env->NewLongArray(4);
     if (result != nullptr) env->SetLongArrayRegion(result, 0, 4, values);
@@ -84,7 +85,10 @@ Java_dev_zerodroid_core_nativebridge_NativeRuntime_nativeAcquireSurface(
 
     // Query before publishing the handle; JNI allocation is kept outside the registry lock.
     jlongArray metrics = make_metrics(env, handle, window.get());
-    if (metrics == nullptr) return nullptr;
+    if (metrics == nullptr) {
+        if (!env->ExceptionCheck()) throw_illegal_state(env, "Native Surface has no valid buffer geometry");
+        return nullptr;
+    }
 
     try {
         std::lock_guard<std::mutex> lock(g_windows_mutex);
@@ -114,13 +118,23 @@ Java_dev_zerodroid_core_nativebridge_NativeRuntime_nativeQuerySurface(
         throw_illegal_argument(env, "Surface lease handle must be positive");
         return nullptr;
     }
-    std::lock_guard<std::mutex> lock(g_windows_mutex);
-    const auto found = g_windows.find(static_cast<std::uint64_t>(raw_handle));
-    if (found == g_windows.end()) {
-        throw_illegal_state(env, "Surface lease is closed or stale");
-        return nullptr;
+    WindowPtr retained;
+    {
+        std::lock_guard<std::mutex> lock(g_windows_mutex);
+        const auto found = g_windows.find(static_cast<std::uint64_t>(raw_handle));
+        if (found == g_windows.end()) {
+            throw_illegal_state(env, "Surface lease is closed or stale");
+            return nullptr;
+        }
+        ANativeWindow_acquire(found->second.get());
+        retained.reset(found->second.get());
+        // Transfer the extra acquire reference to this temporary RAII owner.
     }
-    return make_metrics(env, found->first, found->second.get());
+    jlongArray metrics = make_metrics(env, static_cast<std::uint64_t>(raw_handle), retained.get());
+    if (metrics == nullptr && !env->ExceptionCheck()) {
+        throw_illegal_state(env, "Native Surface no longer has valid buffer geometry");
+    }
+    return metrics;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
