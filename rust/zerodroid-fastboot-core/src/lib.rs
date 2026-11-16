@@ -17,6 +17,7 @@ pub enum FastbootError {
     DownloadTooLarge,
     DownloadNotActive,
     DownloadAlreadyActive,
+    DownloadIdMismatch,
     DownloadIncomplete,
     DownloadOverflow,
     UnknownPartition,
@@ -261,6 +262,18 @@ impl FastbootSession {
         Ok(download.expected_bytes - download.received_bytes)
     }
 
+    /// Abort an incomplete download after transport failure, timeout, or user
+    /// cancellation. The caller must also delete the matching private staging
+    /// object; an unrelated or stale token is never allowed to cancel a session.
+    pub fn cancel_download(&mut self, download_id: u64) -> Result<(), FastbootError> {
+        let active = self.download.as_ref().ok_or(FastbootError::DownloadNotActive)?;
+        if active.id != download_id {
+            return Err(FastbootError::DownloadIdMismatch);
+        }
+        self.download = None;
+        Ok(())
+    }
+
     pub fn handle(&mut self, input: &[u8]) -> Result<FastbootAction, FastbootError> {
         match parse_command(input)? {
             FastbootCommand::GetVar(name) => self.getvar(name),
@@ -432,10 +445,28 @@ mod tests {
     }
 
     #[test]
+    fn download_cancellation_requires_the_matching_session_token() {
+        let mut vm = session();
+        let id = match vm.handle(b"download:00000002").unwrap() {
+            FastbootAction::DownloadReady { download_id, .. } => download_id,
+            _ => panic!("unexpected action"),
+        };
+        assert_eq!(vm.cancel_download(id + 1), Err(FastbootError::DownloadIdMismatch));
+        assert_eq!(vm.cancel_download(id), Ok(()));
+        assert_eq!(vm.cancel_download(id), Err(FastbootError::DownloadNotActive));
+    }
+
+    #[test]
     fn rejects_download_overflow_and_partition_overflow() {
         let mut vm = session();
-        vm.handle(b"download:00000005").unwrap();
+        let first = vm.handle(b"download:00000005").unwrap();
+        let first_id = match first {
+            FastbootAction::DownloadReady { download_id, .. } => download_id,
+            _ => panic!("unexpected action"),
+        };
         assert_eq!(vm.prepare_download_write(6), Err(FastbootError::DownloadOverflow));
+        assert_eq!(vm.cancel_download(first_id + 1), Err(FastbootError::DownloadIdMismatch));
+        vm.cancel_download(first_id).unwrap();
         vm.handle(b"download:00000003").unwrap();
         let write = vm.prepare_download_write(3).unwrap();
         vm.confirm_download_write(write).unwrap();
