@@ -4,5 +4,6 @@ members = [
     "rust/zerodroid-image-core",
     "rust/zerodroid-input-core",
     "rust/zerodroid-vm-spec-core",
+    "rust/zerodroid-guest-memory",
     "rust/zerodroid-ffi",
 ]
