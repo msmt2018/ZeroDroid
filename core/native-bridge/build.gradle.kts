@@ -33,9 +33,16 @@ val ndkHostTag = when {
 val ndkToolchainBin = File(android.ndkDirectory, "toolchains/llvm/prebuilt/$ndkHostTag/bin")
 val rustLinker = File(ndkToolchainBin, "aarch64-linux-android28-clang")
 
+val installRustAndroidTarget by tasks.registering(Exec::class) {
+    group = "build setup"
+    description = "Installs the Rust Android ARM64 compilation target."
+    commandLine("rustup", "target", "add", rustAndroidTarget)
+}
+
 val buildRustAndroidCore by tasks.registering(Exec::class) {
     group = "build"
     description = "Builds the ZeroDroid Rust FFI static library for Android ARM64."
+    dependsOn(installRustAndroidTarget)
     workingDir(rootProject.projectDir)
     inputs.file(rootProject.file("Cargo.toml"))
     inputs.file(rootProject.file("Cargo.lock"))
@@ -44,9 +51,6 @@ val buildRustAndroidCore by tasks.registering(Exec::class) {
     doFirst {
         check(rustLinker.isFile) {
             "Android NDK ARM64 Rust linker not found: $rustLinker"
-        }
-        exec {
-            commandLine("rustup", "target", "add", rustAndroidTarget)
         }
     }
     environment("CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER", rustLinker.absolutePath)
