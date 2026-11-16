@@ -63,6 +63,6 @@ int main() {
         {0x1000, page, GuestMemoryRegionKind::Shared,
             GuestMemoryRead | GuestMemoryWrite | GuestMemoryExecute},
     };
-    CHECK(layout.build(no_execute_shared, 1, 0) == GuestMemoryLayoutStatus::InvalidArgument);
+    CHECK(layout.build(no_execute_shared, 1, page) == GuestMemoryLayoutStatus::InvalidPermissions);
     return 0;
 }
