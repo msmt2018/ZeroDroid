@@ -6,22 +6,25 @@ ZeroDroid 必须依据真实 Host 设备和系统环境选择后端。SoC 理论
 
 ## 2. 分层能力探测
 
-Native Core exposes a bounded `/dev/kvm` probe through the C ABI and JNI. It reports the compile-time host architecture, whether the process can open `/dev/kvm`, the KVM API version, and the captured `errno` when access fails. The probe never creates a VM and never requests elevated privileges. `AVAILABLE` means only that the device node was opened and `KVM_GET_API_VERSION` returned the expected interface version; it does not establish AVF authorization, `KVM_CREATE_VM` permission, EL2 ownership, or Guest boot capability. `ACCESS_DENIED`, `UNAVAILABLE`, `INCOMPATIBLE`, and `ERROR` remain distinct outcomes. The Android layer must combine this evidence with API/service/permission probes before selecting a backend.
+Native Core 通过 C ABI/JNI 分别报告 Host 架构、/dev/kvm 打开结果、KVM API 版本，以及一次短暂的 VM 创建授权探测。探测过程调用 KVM_CREATE_VM 创建一个空 VM fd，并立即关闭该 fd；它不创建 vCPU、不注册 Guest 内存、不加载镜像、不启动 Guest。这样可以把“设备节点可访问”和“当前进程有权创建 VM”区分开。
 
+KVM device/API 状态与 VM_CREATE 状态独立报告，均保留 AVAILABLE、UNAVAILABLE、ACCESS_DENIED、INCOMPATIBLE、ERROR 等结果。打开设备失败时保留 errno；VM_CREATE 失败时单独保留 errno。API 版本不兼容时不会继续尝试创建 VM。该探测不是无副作用的纯查询：它会短暂创建并销毁一个空 VM，因此必须只在用户主动请求能力检查或 Runtime preflight 时执行，避免高频轮询。
+
+即使 VM_CREATE 成功，也只证明当前进程可创建空 VM。它不证明 vCPU 创建、内存注册、EL2/Stage-2、GIC、IOMMU/SMMU、Guest 启动或端到端虚拟化可用。AVF 探测仍须独立验证 API、VirtualizationService、应用授权及目标 VM 类型。
 
 每项能力分别记录 silicon、firmware、kernel、device node、service、app permission、backend API 和 end-to-end 状态。CPU feature 检测结果不能直接当作 KVM/AVF 可用结论。
 
 ## 3. Backend 选择
 
-Kotlin runtime API 中的 `HostCapabilityGate` 是保守决策器，输入必须是实际采集的证据，而不是设备型号推断。AVF 必须同时具备 API、服务、应用授权及目标 VM 类型支持；直接 KVM 必须同时具备 AArch64、KVM API v12、VM 创建授权、EL2、Stage-2 和 ARM GIC 证据。未知、拒绝、错误或不兼容均视为 blocker。决策器只在完整满足条件的硬件后端中按偏好选择；没有满足条件的后端时返回 unsupported，不存在 CPU 模拟或容器回退。当前 JNI 探测只提供 KVM device/API 证据，其余字段必须由后续 Android/Hypervisor adapter 以真实系统证据填充，不能伪造为 AVAILABLE。
+Kotlin runtime API 中的 HostCapabilityGate 是保守决策器，输入必须是实际采集的证据，而不是设备型号推断。AVF 必须同时具备 API、服务、应用授权及目标 VM 类型支持；直接 KVM 必须同时具备 AArch64、KVM API v12、VM 创建授权、EL2、Stage-2 和 ARM GIC 证据。未知、拒绝、错误或不兼容均视为 blocker。决策器只在完整满足条件的硬件后端中按偏好选择；没有满足条件的后端时返回 unsupported，不存在 CPU 模拟或容器回退。
 
 ### 3.1 能力证据与决策边界
 
-- `CapabilityFact.UNKNOWN` 不等于不可用，也绝不等于可用；必须继续探测或报告未知。
-- `/dev/kvm` 可打开且 API 版本正确，只能填充 KVM device/API 证据。
+- CapabilityFact.UNKNOWN 不等于不可用，也绝不等于可用；必须继续探测或报告未知。
+- /dev/kvm 可打开且 API 版本正确，只能填充 KVM device/API 证据。
+- VM_CREATE 探测成功可填充 vmCreationAuthorized=AVAILABLE；它不能填充 EL2、Stage-2 或 GIC 证据。
 - 应用是否被允许创建 VM、EL2 是否由可用 Hypervisor 管理、Stage-2 与 GIC 能力，必须由受支持的系统接口或授权后端证明。
 - AVF service/API/授权状态不能通过检查包名或 Android 版本推断。
-
 
 AVF：检测设备实际提供的 API、VirtualizationService、权限和支持的 VM 类型。AVF API/权限受 Android 版本、系统镜像、设备实现、应用预装/特权授权和具体 API 约束，不能简单规定 Android 13+ 所有手机可用。
 
@@ -33,7 +36,7 @@ AVF：检测设备实际提供的 API、VirtualizationService、权限和支持�
 
 ## 3.2 能力探测执行框架
 
-`HostCapabilityDiscovery` 通过独立的 architecture、AVF、KVM probe 接口收集证据，普通探测异常会转成对应的 `ERROR` 事实并附带来源与异常类型；协程取消会继续向上传播，不会被吞掉。探测器本身不推断 API level、设备型号或包是否安装，也不提供默认成功的 Android 实现。平台适配器必须在其实现前完成权限/API 审计，并只返回由真实系统接口验证的事实。报告同时返回原始证据、后端决策和探测失败记录，便于 UI/日志解释阻断原因。
+HostCapabilityDiscovery 通过独立的 architecture、AVF、KVM probe 接口收集证据，普通探测异常会转成对应的 ERROR 事实并附带来源与异常类型；协程取消会继续向上传播，不会被吞掉。探测器本身不推断 API level、设备型号或包是否安装，也不提供默认成功的 Android 实现。平台适配器必须在其实现前完成权限/API 审计，并只返回由真实系统接口验证的事实。报告同时返回原始证据、后端决策和探测失败记录，便于 UI/日志解释阻断原因。
 
 ## 4. Root、Shizuku 与系统权限
 
