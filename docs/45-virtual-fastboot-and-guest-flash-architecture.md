@@ -25,6 +25,7 @@ Rust crate `zerodroid-fastboot-core` 提供无 unsafe、平台无关的协议核
 - 有界 ASCII 命令解析，限制命令长度；
 - 解析 getvar、download、flash、erase、set_active、reboot、reboot-bootloader 和 continue；当前核心按 bootloader Fastboot 语义报告 is-userspace=no，fastbootd 是独立后续模式；
 - download 长度必须是 8 位十六进制值，且受策略上限约束；
+- transport 失败或用户取消时，必须使用匹配的 download token 取消会话并清理对应 VM 私有 staging object；
 - 下载不把镜像缓存在进程 RAM：协议核心发放 download token 和连续写入 reservation，传输层将数据流写入该 VM 的私有 staging object，持久化成功后再确认偏移；flash 必须等待精确长度完整；
 - partition 名称限制为小写 ASCII 字母、数字、下划线、连字符和点，拒绝路径、斜线、大小写混淆；
 - flash/erase 只能访问显式 PartitionDescriptor allowlist；
