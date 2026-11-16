@@ -33,7 +33,9 @@ The backend interface owns create/start/stop/destroy and state reconciliation. F
 - Monotonic state revision and capability-gated backend creation.
 - Host tests using a test-only backend.
 - A portable Guest GPA layout validator with bounded region count, checked end arithmetic, sorted non-overlap validation, RAM total accounting, per-region permissions and single-region range resolution. Failed rebuilds preserve the previous valid layout.
-- The Android Native CMake target now emits the shared `libzerodroid_vm.so`; the JNI facade remains a separate `libzerodroid_jni.so`.
+- The Android Native CMake target emits `libzerodroid_vm.so`; the JNI facade remains a separate `libzerodroid_jni.so`.
+- Rust `zerodroid-ffi` builds as an ARM64 Android static archive and is linked into the JNI library. Kotlin passes direct ByteBuffer slices to Rust parser entry points without copying the image payload.
+- The FFI currently exposes ARM64 Linux Image header parsing and Android legacy boot.img v0-v2 section indexing; C/Rust record layouts have compile-time C smoke assertions and Rust ABI tests.
 - Rust validation of bounded memory regions, alignment, checked GPA arithmetic, non-overlap and RAM-size consistency.
 - Android legacy boot image v0/v1/v2 indexing for kernel, ramdisk, second-stage, recovery DTBO and DTB; existing v3/v4 and init_boot v4 indexing remains available.
 - ARM64 Linux Image header validation for magic, text offset, declared/effective image size, page-size flags and little-endian Android Guest ABI.
