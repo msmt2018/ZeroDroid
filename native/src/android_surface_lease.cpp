@@ -21,6 +21,7 @@ using WindowPtr = std::unique_ptr<ANativeWindow, WindowDeleter>;
 std::mutex g_windows_mutex;
 std::unordered_map<std::uint64_t, WindowPtr> g_windows;
 std::atomic<std::uint64_t> g_next_handle{1};
+constexpr std::size_t kMaxLiveWindows = 64;
 
 void throw_illegal_argument(JNIEnv* env, const char* message) noexcept {
     jclass type = env->FindClass("java/lang/IllegalArgumentException");
@@ -87,6 +88,10 @@ Java_dev_zerodroid_core_nativebridge_NativeRuntime_nativeAcquireSurface(
 
     try {
         std::lock_guard<std::mutex> lock(g_windows_mutex);
+        if (g_windows.size() >= kMaxLiveWindows) {
+            throw_illegal_state(env, "Native Surface lease limit reached");
+            return nullptr;
+        }
         const auto inserted = g_windows.emplace(handle, std::move(window));
         if (!inserted.second) {
             throw_illegal_state(env, "Native Surface handle collision");
