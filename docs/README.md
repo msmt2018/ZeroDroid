@@ -48,6 +48,7 @@
 40. [DTBO External/Local Fixup 只读计划](40-dtbo-external-local-fixup-plan.md)
 41. [DTBO Overlay 有界拥有树合并与 FDT v17 序列化](41-dtbo-overlay-merge-owned-tree.md)
 42. [Android AVF 技术基准、ZeroDroid 架构校准与完整开发路线](42-avf-reference-architecture-and-complete-development-roadmap.md)
+43. [Android Host 输入到 Guest VirtIO Input 架构](43-android-guest-input-and-virtio-input-architecture.md)
 
 ## 设计基线
 
