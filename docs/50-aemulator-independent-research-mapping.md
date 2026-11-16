@@ -43,3 +43,18 @@ ZeroDroid 的目标不同：运行独立 ARM64 Guest Linux Kernel、Guest init�
 ## 当前实现状态
 
 本文件是研究到实现的映射规范，不代表所有映射模块已经完成。当前可验证的底层代码以 cpp/、native/、rust/ 源码及 CI 为准；Guest Kernel 启动、生产 AVF/KVM 后端、vCPU 执行、虚拟 GIC/Timer、VirtIO 设备闭环和 Android Framework 启动仍需独立实现和真机验证。
+
+## Complementary VMM source research: crosvm
+
+AEmulator remains the research reference for Android userspace compatibility and host-resource bridges. For the independent full-Guest-Kernel VM, the pinned crosvm tree is a separate VMM implementation candidate:
+
+- Upstream: https://github.com/google/crosvm
+- Reviewed revision: `9b63ea5f62f1493b5d2bb1c0da54f090d5e25ebe`
+- License reported by upstream Cargo package: BSD-3-Clause
+- Manifest checkout: `third_party/aosp/external/crosvm-upstream`
+
+The reviewed ARM64 code demonstrates the VMM responsibilities that ZeroDroid must implement or integrate: querying KVM IPA width, choosing ARM VM type, initializing ARM vCPUs and system registers, creating in-kernel VGICv2/v3/ITS devices, registering Guest memory with KVM, constructing FDT data, and dispatching VirtIO queues/devices. The source has Android-specific cfg paths, but that does not prove that every crate or feature builds or runs on every Android phone.
+
+The initial component selection and Android adaptation gates are recorded in `third_party/porting/crosvm-android-arm64-integration.json`. The primary upstream checkout and AOSP comparison checkout remain separate. The selected crates are not yet integrated into the APK or ZeroDroid runtime; production status remains `not_integrated`.
+
+crosvm is a VMM, not the CPU hypervisor itself. It still requires a host KVM/pKVM/AVF facility with sufficient permissions and hardware support. The app must not infer that KVM is usable merely because the kernel exposes a KVM API. This VMM research complements, rather than replaces, the AEmulator userspace research above.
