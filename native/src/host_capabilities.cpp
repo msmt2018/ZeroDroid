@@ -70,8 +70,8 @@ extern "C" ZDROID_API zdroid_status zdroid_host_probe_capabilities(
 
     const int api_version = ioctl(fd, kvm_get_api_version, 0);
     const int ioctl_error = api_version < 0 ? errno : 0;
-    close(fd);
     if (api_version < 0) {
+        close(fd);
         out_capabilities->kvm_errno = ioctl_error;
         out_capabilities->kvm_state =
             (ioctl_error == EACCES || ioctl_error == EPERM)
@@ -86,6 +86,7 @@ extern "C" ZDROID_API zdroid_status zdroid_host_probe_capabilities(
         : ZDROID_KVM_PROBE_INCOMPATIBLE;
 
     if (api_version != expected_kvm_api_version) {
+        close(fd);
         out_capabilities->vm_create_state = ZDROID_KVM_PROBE_INCOMPATIBLE;
         return ZDROID_STATUS_OK;
     }
@@ -96,6 +97,7 @@ extern "C" ZDROID_API zdroid_status zdroid_host_probe_capabilities(
      * This does not create a vCPU or start a guest.
      */
     const int vm_fd = ioctl(fd, kvm_create_vm, 0UL);
+    close(fd);
     if (vm_fd < 0) {
         const int create_error = errno;
         out_capabilities->vm_create_errno = create_error;
