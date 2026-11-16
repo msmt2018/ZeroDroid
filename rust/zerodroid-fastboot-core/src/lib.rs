@@ -467,8 +467,8 @@ mod tests {
         assert_eq!(vm.prepare_download_write(6), Err(FastbootError::DownloadOverflow));
         assert_eq!(vm.cancel_download(first_id + 1), Err(FastbootError::DownloadIdMismatch));
         vm.cancel_download(first_id).unwrap();
-        vm.handle(b"download:00000003").unwrap();
-        let write = vm.prepare_download_write(3).unwrap();
+        vm.handle(b"download:00000201").unwrap();
+        let write = vm.prepare_download_write(513).unwrap();
         vm.confirm_download_write(write).unwrap();
         assert_eq!(vm.handle(b"flash:boot_a"), Err(FastbootError::ImageExceedsPartition));
     }
