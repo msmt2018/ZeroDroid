@@ -641,3 +641,105 @@ mod tests {
     }
 
 }
+
+
+/// Boot mode used when selecting v4 vendor ramdisk fragments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VendorRamdiskBootMode {
+    Normal,
+    Recovery,
+}
+
+/// Android vendor ramdisk fragment types from the v4 table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum VendorRamdiskFragmentType {
+    None = 0,
+    Platform = 1,
+    Recovery = 2,
+    Dlkm = 3,
+}
+
+impl TryFrom<u32> for VendorRamdiskFragmentType {
+    type Error = ParseError;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::None),
+            1 => Ok(Self::Platform),
+            2 => Ok(Self::Recovery),
+            3 => Ok(Self::Dlkm),
+            _ => Err(ParseError::InvalidBootHeader),
+        }
+    }
+}
+
+/// A selected fragment keeps its table index and source range; payload bytes are never copied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedVendorRamdiskFragment {
+    pub table_index: usize,
+    pub fragment_type: VendorRamdiskFragmentType,
+    pub name: [u8; VENDOR_RAMDISK_NAME_SIZE],
+    pub payload: Range<usize>,
+}
+
+/// Matches a fragment board ID against the target board ID.
+/// A zero fragment word is a wildcard; every non-zero word must match.
+fn board_id_matches(
+    fragment_board_id: &[u32; VENDOR_RAMDISK_BOARD_ID_WORDS],
+    target_board_id: &[u32; VENDOR_RAMDISK_BOARD_ID_WORDS],
+) -> bool {
+    fragment_board_id
+        .iter()
+        .zip(target_board_id.iter())
+        .all(|(required, actual)| *required == 0 || required == actual)
+}
+
+/// Selects v4 fragments for a boot mode and target board.
+///
+/// Normal mode selects matching PLATFORM and DLKM fragments. Recovery mode selects
+/// matching RECOVERY fragments. NONE fragments are deliberately not selected because
+/// their semantics are not sufficient to infer a safe boot-mode policy. Unknown fragment
+/// types are rejected by the parser/selector. The caller remains responsible for the
+/// Android bootloader's exact platform-ID source and final ramdisk assembly order.
+pub fn select_vendor_ramdisk_fragments(
+    index: &VendorBootImageIndex,
+    target_board_id: &[u32; VENDOR_RAMDISK_BOARD_ID_WORDS],
+    mode: VendorRamdiskBootMode,
+    max_selected: usize,
+) -> Result<Vec<SelectedVendorRamdiskFragment>, BootMaterialError> {
+    if index.header.header_version != 4 {
+        return Ok(Vec::new());
+    }
+    if index.ramdisk_entries.len() > max_selected {
+        return Err(BootMaterialError::ResourceLimit);
+    }
+
+    let mut selected = Vec::new();
+    for (table_index, entry) in index.ramdisk_entries.iter().enumerate() {
+        let fragment_type = VendorRamdiskFragmentType::try_from(entry.ramdisk_type)
+            .map_err(|_| BootMaterialError::InvalidImageIndex)?;
+        let mode_matches = match mode {
+            VendorRamdiskBootMode::Normal => matches!(
+                fragment_type,
+                VendorRamdiskFragmentType::Platform | VendorRamdiskFragmentType::Dlkm
+            ),
+            VendorRamdiskBootMode::Recovery => {
+                fragment_type == VendorRamdiskFragmentType::Recovery
+            }
+        };
+        if !mode_matches || !board_id_matches(&entry.board_id, target_board_id) {
+            continue;
+        }
+        if selected.len() >= max_selected {
+            return Err(BootMaterialError::ResourceLimit);
+        }
+        selected.push(SelectedVendorRamdiskFragment {
+            table_index,
+            fragment_type,
+            name: entry.ramdisk_name,
+            payload: entry.payload.clone(),
+        });
+    }
+    Ok(selected)
+}
