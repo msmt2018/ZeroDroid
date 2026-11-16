@@ -10,6 +10,7 @@ This crate is the platform-neutral input normalization layer for Android-hosted 
 - Emit complete event frames terminated by exactly one SYN_REPORT.
 - Handle pointer up and cancellation without leaving BTN_TOUCH stuck.
 - Encode the 8-byte little-endian virtio_input_event payload.
+- Queue complete frames atomically with a fixed frame capacity and explicit full/closed errors.
 
 ## Deliberate boundaries
 
@@ -30,7 +31,7 @@ Linux uinput is a host-kernel facility for creating a host input device. It is n
 
 ## Validation
 
-Unit tests cover coordinate scaling, stable slots, multi-contact movement, per-pointer release, cancellation, malformed frames, finite-value validation, pointer limits and exact little-endian event encoding.
+Unit tests cover coordinate scaling, stable slots, multi-contact movement, per-pointer release, cancellation, malformed frames, finite-value validation, pointer limits, exact little-endian event encoding and bounded-queue backpressure/lifecycle.
 
 ## Upstream reference
 
