@@ -39,7 +39,6 @@ object NativeRuntime {
             vmCreateErrno = values[6]
         )
     }
-}
 
     /**
      * Parses an uncompressed ARM64 Linux Image header through the Rust image core.
@@ -107,3 +106,4 @@ object NativeRuntime {
             totalIndexedBytes = values[17]
         )
     }
+}
