@@ -1,0 +1,11 @@
+[package]
+name = "zerodroid-graphics-core"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Bounded platform-neutral display, buffer and frame contracts for ZeroDroid"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]

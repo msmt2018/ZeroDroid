@@ -50,6 +50,7 @@
 42. [Android AVF 技术基准、ZeroDroid 架构校准与完整开发路线](42-avf-reference-architecture-and-complete-development-roadmap.md)
 43. [Android Host 输入到 Guest VirtIO Input 架构](43-android-guest-input-and-virtio-input-architecture.md)
 44. [Android 应用层：Kotlin、Jetpack Compose 与原生 Material 3](44-android-app-kotlin-jetpack-compose-material3.md)
+45. [独立图形核心与画面质量规范](45-independent-graphics-core-and-image-quality-contract.md)
 
 ## 设计基线
 
@@ -60,4 +61,6 @@
 - 优先使用 Android AVF 与 ARM64 KVM/pKVM 硬件虚拟化能力；VMM 与 VirtIO 设备模型必须直接运行在该硬件虚拟化路径上。crosvm 可作为 VMM 候选/代码参考，不是 Hypervisor。明确排除 QEMU、Android Emulator、Goldfish、AEMU 和 Cuttlefish 模拟器运行链。
 - 不将容器、chroot、proot 或普通应用进程隔离描述为完整 Android VM。
 - 不默认关闭 AVB 或 SELinux 来换取启动成功。
+- Android 应用层统一使用 Kotlin、Jetpack Compose 和官方 Material 3。
+- 图形系统独立实现；默认优先原生分辨率与 1:1 像素映射，任何缩放/过滤必须显式协商，禁止隐式低分辨率放大。
 - 所有能力必须区分设计目标、代码实现、构建通过、模拟环境验证和真机验证。
