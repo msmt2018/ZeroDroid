@@ -1,0 +1,12 @@
+[package]
+name = "zerodroid-dynamic-partition-core"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Bounded Android liblp dynamic partition extent mapping"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+zerodroid-image-core = { path = "../zerodroid-image-core" }

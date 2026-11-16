@@ -14,6 +14,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "zerodroid-dynamic-partition-core"
+version = "0.1.0"
+dependencies = [
+ "zerodroid-image-core",
+]
+
+[[package]]
 name = "zerodroid-display-core"
 version = "0.1.0"
 
