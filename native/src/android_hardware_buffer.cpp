@@ -54,7 +54,7 @@ constexpr std::uint64_t kAllowedUsage =
         AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN |
         AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY |
         AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN;
-constexpr std::uint64_t kRequiredGpuUsage =
+constexpr std::uint64_t kGpuUsage =
         AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
         AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT;
 
@@ -105,8 +105,8 @@ Java_dev_zerodroid_core_nativebridge_NativeRuntime_nativeAllocateHardwareBuffer(
     }
     const auto usage = static_cast<std::uint64_t>(raw_usage);
     if (raw_usage <= 0 || (usage & ~kAllowedUsage) != 0 ||
-        (usage & kRequiredGpuUsage) != kRequiredGpuUsage) {
-        throw_argument(env, "HardwareBuffer usage must contain sampled-image and color-output GPU flags and no unsupported bits");
+        (usage & kGpuUsage) == 0) {
+        throw_argument(env, "HardwareBuffer usage must contain at least one supported GPU flag and no unsupported bits");
         return nullptr;
     }
 
