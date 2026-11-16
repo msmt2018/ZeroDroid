@@ -76,6 +76,29 @@ impl ReplayState {
         Ok(self.vms.get(&vm_id).ok_or(ReplayError::VmNotRegistered)?.objects.len())
     }
 
+    /// Applies one committed journal transaction after decoding its typed mutations.
+    pub fn apply_committed_transaction(
+        &mut self,
+        transaction: &zerodroid_storage_journal::CommittedTransaction,
+    ) -> Result<(), ReplayError> {
+        let decoded = crate::decode_transaction(transaction).map_err(ReplayError::Mutation)?;
+        self.apply_transaction(&decoded)
+    }
+
+    /// Rebuilds state from a complete recovery report atomically. If any committed
+    /// transaction is invalid, the original state and commit sequence are retained.
+    pub fn replay_report(
+        &mut self,
+        report: &zerodroid_storage_journal::RecoveryReport,
+    ) -> Result<(), ReplayError> {
+        let mut candidate = self.clone();
+        for transaction in &report.committed_transactions {
+            candidate.apply_committed_transaction(transaction)?;
+        }
+        *self = candidate;
+        Ok(())
+    }
+
     /// Applies one already-committed transaction atomically to the replay index.
     /// Validation happens against a private VM-state copy; no state is published
     /// when any mutation fails. This is an in-memory replay planner, not durable I/O.
@@ -226,6 +249,55 @@ mod replay_tests {
             mutations: payloads,
             commit_sequence: sequence,
         }).unwrap()
+    }
+
+    #[test]
+    fn journal_recovery_report_rebuilds_typed_storage_state() {
+        use zerodroid_storage_journal::{encode as encode_record, recover_report, JournalRecord, RecordKind};
+        let mutations = vec![
+            encode(&StorageMutation::VmRegister { vm_id: 41, generation: 3, quota_bytes: 8192 }).unwrap(),
+            encode(&StorageMutation::ObjectCreate { vm_id: 41, generation: 3, object_id: 9, capacity_bytes: 8192, name: "super".into() }).unwrap(),
+        ];
+        let mut log = encode_record(&JournalRecord { sequence: 1, transaction_id: 77, kind: RecordKind::Begin, payload: vec![] }).unwrap();
+        for (index, payload) in mutations.into_iter().enumerate() {
+            log.extend(encode_record(&JournalRecord {
+                sequence: index as u64 + 2, transaction_id: 77,
+                kind: RecordKind::Mutation, payload,
+            }).unwrap());
+        }
+        log.extend(encode_record(&JournalRecord { sequence: 4, transaction_id: 77, kind: RecordKind::Commit, payload: vec![] }).unwrap());
+
+        let report = recover_report(&log).unwrap();
+        let mut state = ReplayState::new();
+        state.replay_report(&report).unwrap();
+        assert_eq!(state.vm_count(), 1);
+        assert_eq!(state.object_count(41).unwrap(), 1);
+        assert_eq!(state.last_commit_sequence(), Some(4));
+    }
+
+    #[test]
+    fn replay_report_is_atomic_when_a_later_transaction_is_invalid() {
+        use zerodroid_storage_journal::{encode as encode_record, recover_report, JournalRecord, RecordKind};
+        let register = encode(&StorageMutation::VmRegister { vm_id: 41, generation: 3, quota_bytes: 4096 }).unwrap();
+        let invalid_page = encode(&StorageMutation::PagePut {
+            vm_id: 41, generation: 3, object_id: 99, page_index: 0, page: vec![1; PAGE_SIZE],
+        }).unwrap();
+        let mut log = Vec::new();
+        for (sequence, transaction_id, kind, payload) in [
+            (1, 10, RecordKind::Begin, vec![]),
+            (2, 10, RecordKind::Mutation, register),
+            (3, 10, RecordKind::Commit, vec![]),
+            (4, 11, RecordKind::Begin, vec![]),
+            (5, 11, RecordKind::Mutation, invalid_page),
+            (6, 11, RecordKind::Commit, vec![]),
+        ] {
+            log.extend(encode_record(&JournalRecord { sequence, transaction_id, kind, payload }).unwrap());
+        }
+        let report = recover_report(&log).unwrap();
+        let mut state = ReplayState::new();
+        assert_eq!(state.replay_report(&report), Err(ReplayError::ObjectNotFound));
+        assert_eq!(state.vm_count(), 0);
+        assert_eq!(state.last_commit_sequence(), None);
     }
 
     #[test]
