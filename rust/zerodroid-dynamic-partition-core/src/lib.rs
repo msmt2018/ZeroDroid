@@ -1,9 +1,11 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeSet;
-use zerodroid_image_core::lp_metadata::{LpMetadataIndex, LP_TARGET_LINEAR, LP_TARGET_ZERO};
+use zerodroid_image_core::lp_metadata::LpMetadataIndex;
 
 const SECTOR_BYTES: u64 = 512;
+const LP_TARGET_LINEAR: u32 = 0;
+const LP_TARGET_ZERO: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DynamicPartitionError {
@@ -170,7 +172,6 @@ mod tests {
     use zerodroid_image_core::lp_metadata::{
         LpBlockDevice, LpExtent, LpGeometry, LpGroup, LpPartition,
     };
-    use std::ops::Range;
 
     fn metadata() -> LpMetadataIndex {
         LpMetadataIndex {
