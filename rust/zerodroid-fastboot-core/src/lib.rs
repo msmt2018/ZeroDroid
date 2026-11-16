@@ -330,13 +330,13 @@ impl FastbootSession {
     fn getvar(&self, name: &str) -> Result<FastbootAction, FastbootError> {
         let value = match name {
             "version" => "0.4".to_owned(),
-            "is-userspace" => "yes".to_owned(),
+            "is-userspace" => "no".to_owned(),
             "max-download-size" => format!("{:08x}", self.policy.max_download_bytes.min(u64::from(u32::MAX))),
             "current-slot" => self.active_slot.map(|slot| slot.to_string()).unwrap_or_else(|| "no-slot".to_owned()),
             "all" => {
                 let mut values = vec![
                     "version:0.4".to_owned(),
-                    "is-userspace:yes".to_owned(),
+                    "is-userspace:no".to_owned(),
                     format!("max-download-size:{:08x}", self.policy.max_download_bytes.min(u64::from(u32::MAX))),
                     format!("current-slot:{}", self.active_slot.map(|slot| slot.to_string()).unwrap_or_else(|| "no-slot".to_owned())),
                 ];
