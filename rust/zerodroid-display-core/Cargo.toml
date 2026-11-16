@@ -1,0 +1,11 @@
+[package]
+name = "zerodroid-display-core"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Bounded, platform-neutral Guest display frame contracts for ZeroDroid"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
