@@ -23,7 +23,7 @@ Fastboot 不是 Hypervisor，也不能替代 VMM、Guest Kernel 或 AVB。进入
 
 Rust crate `zerodroid-fastboot-core` 提供无 unsafe、平台无关的协议核心：
 - 有界 ASCII 命令解析，限制命令长度；
-- 解析 getvar、download、flash、erase、set_active、reboot、reboot-bootloader 和 continue；
+- 解析 getvar、download、flash、erase、set_active、reboot、reboot-bootloader 和 continue；当前核心按 bootloader Fastboot 语义报告 is-userspace=no，fastbootd 是独立后续模式；
 - download 长度必须是 8 位十六进制值，且受策略上限约束；
 - 下载不把镜像缓存在进程 RAM：协议核心发放 download token 和连续写入 reservation，传输层将数据流写入该 VM 的私有 staging object，持久化成功后再确认偏移；flash 必须等待精确长度完整；
 - partition 名称限制为小写 ASCII 字母、数字、下划线、连字符和点，拒绝路径、斜线、大小写混淆；
