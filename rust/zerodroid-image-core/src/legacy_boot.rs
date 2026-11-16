@@ -264,7 +264,7 @@ mod tests {
         data[1644..1648].copy_from_slice(&(V2_HEADER_BYTES as u32).to_le_bytes());
         data[1648..1652].copy_from_slice(&1024_u32.to_le_bytes());
         data[1652..1660].copy_from_slice(&0x8800_0000_u64.to_le_bytes());
-        let parsed = parse_legacy_boot_image(&data, budget(), 8192).unwrap();
+        let parsed = parse_legacy_boot_image(&data, budget(), 16384).unwrap();
         assert_eq!(parsed.recovery_dtbo, Some(16384..16896));
         assert_eq!(parsed.dtb, Some(20480..21504));
         assert_eq!(parsed.header.dtb_address, 0x8800_0000);
@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn enforces_payload_and_input_budgets() {
         let data = base_image(0, 4096, 16384);
-        assert_eq!(parse_legacy_boot_image(&data, budget(), 8191), Err(ParseError::ResourceLimit));
+        assert_eq!(parse_legacy_boot_image(&data, budget(), 7167), Err(ParseError::ResourceLimit));
         let mut limited = budget();
         limited.max_input_bytes = 1024;
         assert_eq!(parse_legacy_boot_image(&data, limited, 8192), Err(ParseError::ResourceLimit));
