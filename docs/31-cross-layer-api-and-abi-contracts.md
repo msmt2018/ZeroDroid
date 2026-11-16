@@ -19,6 +19,7 @@ UI/Compose → Kotlin UseCase/Repository → VM Controller/Foreground Service �
 - 所有函数返回稳定 status code，详细诊断通过 error_info 获取。
 - 每个输出对象明确所有权。
 - 公共头文件必须同时通过 C 与 C++ 编译器编译；ABI 布局通过静态断言验证。
+- 本次 Native Host Capability 结构新增 vm_create_state/vm_create_errno，C ABI 主版本提升至 2；JNI 整数载荷同步扩展为 7 个字段。调用方必须通过 abiVersion() 检查版本，并按结构版本解析，不得假定旧版结构大小。
 
 ## 4. JNI
 
