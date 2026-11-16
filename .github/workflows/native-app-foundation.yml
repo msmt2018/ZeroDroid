@@ -6,6 +6,7 @@ on:
       - "app/**"
       - "core/**"
       - "native/**"
+      - "cpp/**"
       - "rust/**"
       - "third_party/manifest/**"
       - "third_party/porting/**"
