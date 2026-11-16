@@ -81,17 +81,15 @@ Java_dev_zerodroid_core_nativebridge_NativeRuntime_nativeAcquireSurface(
         return nullptr;
     }
 
-    jlongArray metrics = nullptr;
+    // Query before publishing the handle; JNI allocation is kept outside the registry lock.
+    jlongArray metrics = make_metrics(env, handle, window.get());
+    if (metrics == nullptr) return nullptr;
+
     try {
         std::lock_guard<std::mutex> lock(g_windows_mutex);
-        auto inserted = g_windows.emplace(handle, std::move(window));
+        const auto inserted = g_windows.emplace(handle, std::move(window));
         if (!inserted.second) {
             throw_illegal_state(env, "Native Surface handle collision");
-            return nullptr;
-        }
-        metrics = make_metrics(env, handle, inserted.first->second.get());
-        if (metrics == nullptr) {
-            g_windows.erase(inserted.first);
             return nullptr;
         }
     } catch (const std::bad_alloc&) {
