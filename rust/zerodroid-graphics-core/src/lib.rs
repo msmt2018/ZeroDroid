@@ -19,7 +19,7 @@ pub enum GraphicsError {
     ArithmeticOverflow, InvalidStride, InvalidBufferRange, BufferTooLarge,
     InvalidDamage, TooManyDamageRects, InvalidGeneration, InvalidSequence,
     InvalidQueueCapacity, QueueFull, QueueEmpty, DuplicateBuffer, UnknownBuffer,
-    BufferBusy, InvalidBufferState,
+    BufferBusy, InvalidBufferState, InvalidBufferId, InvalidFenceId, LeaseIdExhausted,
 }
 impl fmt::Display for GraphicsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{self:?}") }
@@ -207,7 +207,7 @@ pub struct BufferRegistration {
     pub color_space: ColorSpace, pub alpha_mode: AlphaMode,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BufferLease { pub id: BufferId, pub generation: u64 }
+pub struct BufferLease { pub id: BufferId, pub generation: u64, pub lease_id: u64 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BufferState { Available, Queued, InFlight }
 
@@ -222,7 +222,7 @@ impl BufferRegistry {
     pub fn new(generation: u64, max_entries: usize) -> Result<Self, GraphicsError> {
         if generation == 0 { return Err(GraphicsError::InvalidGeneration); }
         if max_entries == 0 || max_entries > 256 { return Err(GraphicsError::InvalidQueueCapacity); }
-        Ok(Self { generation, entries: std::collections::BTreeMap::new(), max_entries })
+        Ok(Self { generation, entries: std::collections::BTreeMap::new(), max_entries, next_lease_id: 1 })
     }
     pub fn register(&mut self, registration: BufferRegistration) -> Result<(), GraphicsError> {
         registration.layout.validate()?;
