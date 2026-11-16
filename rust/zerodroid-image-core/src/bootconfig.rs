@@ -124,7 +124,24 @@ pub fn merge_bootconfig(
     Ok(merged)
 }
 
-#[cfg(test)]
+
+
+/// Parses the bootconfig tail indexed by a vendor_boot v4 image parser.
+pub fn parse_vendor_bootconfig(
+    image: &[u8],
+    index: &crate::vendor_boot::VendorBootImageIndex,
+    budget: ParseBudget,
+    limits: BootConfigLimits,
+) -> Result<Option<BootConfig>, BootConfigError> {
+    let Some(range) = &index.bootconfig else {
+        return Ok(None);
+    };
+    if range.start > range.end || range.end > image.len() {
+        return Err(BootConfigError::ResourceLimit);
+    }
+    parse_bootconfig(&image[range.clone()], budget, limits).map(Some)
+}
+\n#[cfg(test)]
 mod tests {
     use super::*;
 
