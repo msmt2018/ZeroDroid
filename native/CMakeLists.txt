@@ -43,7 +43,7 @@ if(ANDROID)
         IMPORTED_LOCATION "${ZERODROID_RUST_STATICLIB}")
 
     add_library(zerodroid_jni SHARED src/jni_bridge.cpp)
-    target_link_libraries(zerodroid_jni PRIVATE zerodroid_core zerodroid_rust_ffi log)
+    target_link_libraries(zerodroid_jni PRIVATE zerodroid_core zerodroid_rust_ffi log android dl m)
     target_compile_features(zerodroid_jni PRIVATE cxx_std_20)
 endif()
 
