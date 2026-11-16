@@ -275,7 +275,7 @@ mod tests {
         let mut data = base_image(1, 4096, 16384);
         data[1644..1648].copy_from_slice(&1_u32.to_le_bytes());
         assert_eq!(parse_legacy_boot_image(&data, budget(), 8192), Err(ParseError::InvalidBootHeader));
-        let mut data = base_image(0, 3000, 16384);
+        let data = base_image(0, 3000, 16384);
         assert_eq!(parse_legacy_boot_image(&data, budget(), 8192), Err(ParseError::InvalidBootHeader));
         let mut data = base_image(1, 4096, 20480);
         data[1632..1636].copy_from_slice(&512_u32.to_le_bytes());
