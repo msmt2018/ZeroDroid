@@ -147,52 +147,32 @@ impl Default for FastbootPolicy {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct DownloadBuffer {
-    expected_bytes: usize,
-    bytes: Vec<u8>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DownloadProgress {
+    id: u64,
+    expected_bytes: u64,
+    received_bytes: u64,
 }
 
-impl DownloadBuffer {
-    fn new(expected_bytes: u64, max_bytes: u64) -> Result<Self, FastbootError> {
-        if expected_bytes == 0 || expected_bytes > max_bytes {
-            return Err(FastbootError::DownloadTooLarge);
-        }
-        let expected = usize::try_from(expected_bytes).map_err(|_| FastbootError::DownloadTooLarge)?;
-        let mut bytes = Vec::new();
-        bytes.try_reserve_exact(expected).map_err(|_| FastbootError::ResourceLimit)?;
-        Ok(Self { expected_bytes: expected, bytes })
-    }
+/// A write reservation. The transport writes these bytes to a bounded per-VM
+/// staging object first, then confirms the reservation with the session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DownloadWrite {
+    download_id: u64,
+    offset: u64,
+    length: u64,
+}
 
-    pub fn push(&mut self, chunk: &[u8]) -> Result<(), FastbootError> {
-        let new_len = self.bytes.len().checked_add(chunk.len()).ok_or(FastbootError::DownloadOverflow)?;
-        if new_len > self.expected_bytes {
-            return Err(FastbootError::DownloadOverflow);
-        }
-        self.bytes.extend_from_slice(chunk);
-        Ok(())
-    }
-
-    pub fn remaining_bytes(&self) -> usize {
-        self.expected_bytes - self.bytes.len()
-    }
-
-    pub fn is_complete(&self) -> bool {
-        self.bytes.len() == self.expected_bytes
-    }
-
-    fn into_bytes(self) -> Result<Vec<u8>, FastbootError> {
-        if !self.is_complete() {
-            return Err(FastbootError::DownloadIncomplete);
-        }
-        Ok(self.bytes)
-    }
+impl DownloadWrite {
+    pub fn download_id(self) -> u64 { self.download_id }
+    pub fn offset(self) -> u64 { self.offset }
+    pub fn length(self) -> u64 { self.length }
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum FastbootAction {
     Reply(Vec<u8>),
-    DownloadReady { expected_bytes: u64 },
+    DownloadReady { download_id: u64, expected_bytes: u64 },
     Flash(FlashPlan),
     Erase(ErasePlan),
     SetActiveSlot(char),
@@ -204,7 +184,8 @@ pub enum FastbootAction {
 #[derive(Debug, PartialEq, Eq)]
 pub struct FlashPlan {
     pub partition: String,
-    pub image: Vec<u8>,
+    pub download_id: u64,
+    pub image_size_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -216,7 +197,8 @@ pub struct ErasePlan {
 pub struct FastbootSession {
     policy: FastbootPolicy,
     partitions: Vec<PartitionDescriptor>,
-    download: Option<DownloadBuffer>,
+    download: Option<DownloadProgress>,
+    next_download_id: u64,
     active_slot: Option<char>,
 }
 
@@ -243,35 +225,69 @@ impl FastbootSession {
                 return Err(FastbootError::ResourceLimit);
             }
         }
-        Ok(Self { policy, partitions, download: None, active_slot })
+        Ok(Self { policy, partitions, download: None, next_download_id: 1, active_slot })
     }
 
-    pub fn accept_download_chunk(&mut self, chunk: &[u8]) -> Result<usize, FastbootError> {
+    /// Reserve the next sequential write. The transport must persist the chunk
+    /// to a private per-VM staging object before calling confirm_download_write.
+    pub fn prepare_download_write(&self, chunk_len: usize) -> Result<DownloadWrite, FastbootError> {
+        let download = self.download.as_ref().ok_or(FastbootError::DownloadNotActive)?;
+        let length = u64::try_from(chunk_len).map_err(|_| FastbootError::DownloadOverflow)?;
+        let end = download.received_bytes.checked_add(length).ok_or(FastbootError::DownloadOverflow)?;
+        if length == 0 || end > download.expected_bytes {
+            return Err(FastbootError::DownloadOverflow);
+        }
+        Ok(DownloadWrite {
+            download_id: download.id,
+            offset: download.received_bytes,
+            length,
+        })
+    }
+
+    /// Commit a write reservation only after the staging backend confirms that
+    /// the corresponding bytes were durably accepted.
+    pub fn confirm_download_write(&mut self, write: DownloadWrite) -> Result<u64, FastbootError> {
         let download = self.download.as_mut().ok_or(FastbootError::DownloadNotActive)?;
-        download.push(chunk)?;
-        Ok(download.remaining_bytes())
+        if write.download_id != download.id || write.offset != download.received_bytes {
+            return Err(FastbootError::DownloadOverflow);
+        }
+        let end = write.offset.checked_add(write.length).ok_or(FastbootError::DownloadOverflow)?;
+        if write.length == 0 || end > download.expected_bytes {
+            return Err(FastbootError::DownloadOverflow);
+        }
+        download.received_bytes = end;
+        Ok(download.expected_bytes - download.received_bytes)
     }
 
     pub fn handle(&mut self, input: &[u8]) -> Result<FastbootAction, FastbootError> {
         match parse_command(input)? {
             FastbootCommand::GetVar(name) => self.getvar(name),
             FastbootCommand::Download { size } => {
-                self.download = Some(DownloadBuffer::new(size, self.policy.max_download_bytes)?);
-                Ok(FastbootAction::DownloadReady { expected_bytes: size })
+                if size == 0 || size > self.policy.max_download_bytes {
+                    return Err(FastbootError::DownloadTooLarge);
+                }
+                let download_id = self.next_download_id;
+                self.next_download_id = self.next_download_id.checked_add(1).ok_or(FastbootError::ResourceLimit)?;
+                self.download = Some(DownloadProgress { id: download_id, expected_bytes: size, received_bytes: 0 });
+                Ok(FastbootAction::DownloadReady { download_id, expected_bytes: size })
             }
             FastbootCommand::Flash { partition } => {
                 let descriptor = self.partition(partition)?.clone();
                 if !descriptor.flashable {
                     return Err(FastbootError::PartitionNotFlashable);
                 }
-                let download = self.download.take().ok_or(FastbootError::DownloadNotActive)?;
-                let image = download.into_bytes()?;
-                if u64::try_from(image.len()).map_err(|_| FastbootError::DownloadTooLarge)? > descriptor.capacity_bytes {
+                let download = self.download.as_ref().ok_or(FastbootError::DownloadNotActive)?;
+                if download.received_bytes != download.expected_bytes {
+                    return Err(FastbootError::DownloadIncomplete);
+                }
+                if download.expected_bytes > descriptor.capacity_bytes {
                     return Err(FastbootError::ImageExceedsPartition);
                 }
+                let download = self.download.take().ok_or(FastbootError::DownloadNotActive)?;
                 Ok(FastbootAction::Flash(FlashPlan {
                     partition: descriptor.name,
-                    image,
+                    download_id: download.id,
+                    image_size_bytes: download.expected_bytes,
                 }))
             }
             FastbootCommand::Erase { partition } => {
@@ -378,12 +394,21 @@ mod tests {
     #[test]
     fn download_is_bounded_and_requires_exact_length() {
         let mut vm = session();
-        assert_eq!(vm.handle(b"download:00000004"), Ok(FastbootAction::DownloadReady { expected_bytes: 4 }));
-        assert_eq!(vm.accept_download_chunk(&[1, 2]), Ok(2));
+        let ready = vm.handle(b"download:00000004").unwrap();
+        let download_id = match ready {
+            FastbootAction::DownloadReady { download_id, expected_bytes: 4 } => download_id,
+            _ => panic!("unexpected action"),
+        };
+        let first = vm.prepare_download_write(2).unwrap();
+        assert_eq!(first.download_id(), download_id);
+        assert_eq!(first.offset(), 0);
+        assert_eq!(vm.confirm_download_write(first), Ok(2));
         assert_eq!(vm.handle(b"flash:boot_a"), Err(FastbootError::DownloadIncomplete));
-        assert_eq!(vm.accept_download_chunk(&[3, 4]), Ok(0));
+        let second = vm.prepare_download_write(2).unwrap();
+        assert_eq!(second.offset(), 2);
+        assert_eq!(vm.confirm_download_write(second), Ok(0));
         assert_eq!(vm.handle(b"flash:boot_a"), Ok(FastbootAction::Flash(FlashPlan {
-            partition: "boot_a".to_owned(), image: vec![1, 2, 3, 4],
+            partition: "boot_a".to_owned(), download_id, image_size_bytes: 4,
         })));
     }
 
@@ -391,9 +416,10 @@ mod tests {
     fn rejects_download_overflow_and_partition_overflow() {
         let mut vm = session();
         vm.handle(b"download:00000005").unwrap();
-        assert_eq!(vm.accept_download_chunk(&[0; 6]), Err(FastbootError::DownloadOverflow));
+        assert_eq!(vm.prepare_download_write(6), Err(FastbootError::DownloadOverflow));
         vm.handle(b"download:00000003").unwrap();
-        vm.accept_download_chunk(&[1, 2, 3]).unwrap();
+        let write = vm.prepare_download_write(3).unwrap();
+        vm.confirm_download_write(write).unwrap();
         assert_eq!(vm.handle(b"flash:boot_a"), Err(FastbootError::ImageExceedsPartition));
     }
 
@@ -401,7 +427,8 @@ mod tests {
     fn flash_and_erase_are_allowlisted_and_capability_gated() {
         let mut vm = session();
         vm.handle(b"download:00000001").unwrap();
-        vm.accept_download_chunk(&[7]).unwrap();
+        let write = vm.prepare_download_write(1).unwrap();
+        vm.confirm_download_write(write).unwrap();
         assert_eq!(vm.handle(b"flash:userdata"), Err(FastbootError::UnknownPartition));
         assert_eq!(vm.handle(b"erase:system_a"), Err(FastbootError::PartitionNotErasable));
         assert!(matches!(vm.handle(b"erase:boot_a"), Ok(FastbootAction::Erase(_))));
