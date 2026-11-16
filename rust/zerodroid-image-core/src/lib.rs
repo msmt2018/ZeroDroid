@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-pub mod avb;
+pub mod avb;\npub mod bootconfig;
 pub mod arm64_kernel;
 pub mod legacy_boot;
 pub mod fdt;
