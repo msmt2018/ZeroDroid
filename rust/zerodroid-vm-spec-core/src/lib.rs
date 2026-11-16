@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod boot_plan;
+
 //! Safe, bounded validation of the ARM64 Guest machine shape.
 //!
 //! This crate validates data only. It does not open KVM, allocate host memory,
