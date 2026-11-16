@@ -211,3 +211,54 @@ ZeroDroid 的优先顺序：
 - https://github.com/uxazu/AEmulator/blob/main/app/src/main/java/app/aemu/importer/Importer.kt
 
 AEmulator 仓库标注 GPL-3.0。该许可证不自动授予第三方 ROM、厂商固件、预编译 blob 或品牌商标的再分发权。ZeroDroid 应维护独立的第三方依赖清单、许可证清单和 ROM 来源/版权记录。
+
+
+## 10. 第二轮源码审计：GL Bridge、GuestRunner 与 TreeFixer
+
+### 10.1 GL Bridge 的真实执行路径
+
+已读取 `native/glbridge/guest.c` 与 `native/glbridge/host.c` 的实现开头及核心结构：
+
+- Guest 侧为 GLES API 建立代理入口，按绘制线程维护命令流；每个绘制线程使用 Unix socket 连接 Host。
+- Host 侧为 Guest 绘制线程创建真实 EGL/GLES context，并在手机 GPU 上重放命令流。
+- Guest window 映射为 Host context 中的 framebuffer object；swap 路径将完成帧复制/回传到应用窗口。
+- Guest EGL display/config 与部分 context 路径保留 SwiftShader；是否走真实 Host GPU 由 context policy 决定。
+- Host 实现维护 Guest/Host GL object 映射、context share group、surface、buffer ring、fence 等状态。
+
+这说明 AEmulator 采用的是“Guest API 代理 + Host GPU 命令执行”的硬件加速桥接，不是 Guest 获得 GPU 设备直通，也不能据此宣称零拷贝。命令编码、socket 往返、状态同步、buffer 上传/回读和 frame present 都可能产生额外开销。
+
+ZeroDroid 的借鉴方向：
+- 明确区分 GPU 直通、虚拟 GPU 命令转发、Host GPU 代理和软件渲染。
+- 为 GL/Vulkan 协议定义版本协商、命令长度上限、资源 ID 归属、对象生命周期、同步 fence 和错误恢复。
+- 重点验证 buffer 是否能通过 AHardwareBuffer/DMA-BUF 等受支持路径共享，减少 CPU copy；不能支持时必须如实选择复制路径。
+- Host GPU context 不得跨 VM 混用对象或同步状态。
+- 不直接复用 AEmulator GL 命令协议或源代码；优先评估 Android/virtio-gpu/gfxstream/Venus 等公开协议与可维护实现，并验证 Android ARM64 设备侧可用性。
+
+### 10.2 GuestRunner：执行器选择及其边界
+
+`GuestRunner.kt` 根据 ROM API/engine 选择不同执行路径：
+- 新版 ARM64 路径运行原生 ARM64 runner，并通过环境变量传递 ROM root、属性区、Binder socket、输入 socket 和 GPU bridge endpoint。
+- 旧版 Guest 32-bit 路径使用 QEMU user-mode，部分设备在支持 AArch32 时直接运行 32-bit binary。
+- Guest 运行环境由宿主 ProcessBuilder 创建，路径和环境由 Host 管理。
+
+该路径再次确认它不是独立 Guest Kernel/VMM。ZeroDroid 应由 VMM 创建 Guest vCPU 并加载 Guest Kernel/DTB/ramdisk，不能把 Guest ELF ProcessBuilder 执行流程升级包装成系统 VM。
+
+### 10.3 TreeFixer：ROM 修补策略
+
+`TreeFixer.kt` 的 `sanitize()` 会把一批厂商 HAL、GPU/EGL 驱动和 OMX 模块移入 `system/.aemu-parked`，并保留可恢复副本；`fixup()` 则安装 engine 文件、保护预编译 OAT、调整主题/厂商服务、创建设备节点和系统目录等。
+
+可借鉴：
+- ROM 修改必须可追踪、可逆，记录原始文件哈希、变更原因、变更工具版本和恢复路径。
+- 对 HAL/驱动冲突进行分类诊断，不能简单按文件名就认定某个模块不可用。
+- 建立 Vendor HAL、VINTF、GPU、音频、相机和传感器依赖矩阵。
+
+不能直接用于 ZeroDroid 的原因：
+- 真正的 Guest Kernel/Guest HAL 需要加载与 Guest Kernel、DTB、VINTF 和设备模型匹配的驱动/模块。
+- 批量停放 Vendor HAL 可能使依赖这些服务的 system_server、surfaceflinger、media、camera 或厂商 Framework 失去必要能力。
+- ZeroDroid 应优先保留原始 ROM 镜像，只在明确的兼容转换步骤中生成独立派生镜像；所有修改采用事务式、可回滚的镜像变换，不原地破坏用户导入的 ROM。
+
+## 11. 本轮审计结论更新
+
+第二轮审计确认 AEmulator 的 GPU 路径是 Host GPU 代理执行，GuestRunner 是 Host 进程启动 Guest 用户态程序，TreeFixer 则主动调整 ROM 文件树以适配“无独立 Guest Kernel/硬件”的运行环境。这些技术对 ZeroDroid 有研究价值，但与我们要实现的系统级 VM 在权限模型、内核边界、驱动加载、设备所有权和启动链上存在根本差异。
+
+尚未完成的审计包括 GL bridge 的全部命令分发/同步实现、GuestVm 的完整启动和退出流程、Importer 中每一种格式解析器的资源边界，以及 AEmulator 第三方二进制和许可证逐项核验。不能把本轮结果称为完整安全审计。
