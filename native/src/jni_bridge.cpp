@@ -68,3 +68,52 @@ Java_dev_zerodroid_core_nativebridge_NativeRuntime_parseArm64KernelImageRaw(
     env->SetLongArrayRegion(result, 0, 8, values);
     return result;
 }
+
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_dev_zerodroid_core_nativebridge_NativeRuntime_parseLegacyBootImageRaw(
+    JNIEnv* env, jobject, jobject direct_buffer, jlong max_input_bytes, jlong max_payload_bytes) {
+    if (direct_buffer == nullptr || max_input_bytes <= 0 || max_payload_bytes <= 0) {
+        return nullptr;
+    }
+    void* address = env->GetDirectBufferAddress(direct_buffer);
+    const jlong capacity = env->GetDirectBufferCapacity(direct_buffer);
+    if (address == nullptr || capacity <= 0 ||
+        static_cast<unsigned long long>(capacity) >
+            static_cast<unsigned long long>(std::numeric_limits<std::size_t>::max())) {
+        return nullptr;
+    }
+
+    zdroid_rust_legacy_boot_image_info info{};
+    info.struct_size = sizeof(info);
+    const auto status = zdroid_rust_parse_legacy_boot_image(
+        static_cast<const std::uint8_t*>(address),
+        static_cast<std::size_t>(capacity),
+        static_cast<std::uint64_t>(max_input_bytes),
+        static_cast<std::uint64_t>(max_payload_bytes),
+        &info);
+
+    const jlong values[] = {
+        static_cast<jlong>(status),
+        static_cast<jlong>(info.header_version),
+        static_cast<jlong>(info.header_size),
+        static_cast<jlong>(info.page_size),
+        static_cast<jlong>(info.kernel_offset),
+        static_cast<jlong>(info.kernel_size),
+        static_cast<jlong>(info.ramdisk_offset),
+        static_cast<jlong>(info.ramdisk_size),
+        static_cast<jlong>(info.second_offset),
+        static_cast<jlong>(info.second_size),
+        static_cast<jlong>(info.recovery_dtbo_offset),
+        static_cast<jlong>(info.recovery_dtbo_size),
+        static_cast<jlong>(info.dtb_offset),
+        static_cast<jlong>(info.dtb_size),
+        static_cast<jlong>(info.recovery_dtbo_present),
+        static_cast<jlong>(info.dtb_present),
+        static_cast<jlong>(info.dtb_address),
+        static_cast<jlong>(info.total_indexed_bytes),
+    };
+    jlongArray result = env->NewLongArray(18);
+    if (result == nullptr) return nullptr;
+    env->SetLongArrayRegion(result, 0, 18, values);
+    return result;
+}
