@@ -207,6 +207,7 @@ pub fn parse_vendor_boot_image_v3_v4(
             let ramdisk_size = read_u32(bytes, 0)?;
             let ramdisk_offset = read_u32(bytes, 4)?;
             let ramdisk_type = read_u32(bytes, 8)?;
+            VendorRamdiskFragmentType::try_from(ramdisk_type)?;
             if ramdisk_size == 0 {
                 return Err(ParseError::InvalidBootHeader);
             }
@@ -711,10 +712,6 @@ pub fn select_vendor_ramdisk_fragments(
     if index.header.header_version != 4 {
         return Ok(Vec::new());
     }
-    if index.ramdisk_entries.len() > max_selected {
-        return Err(BootMaterialError::ResourceLimit);
-    }
-
     let mut selected = Vec::new();
     for (table_index, entry) in index.ramdisk_entries.iter().enumerate() {
         let fragment_type = VendorRamdiskFragmentType::try_from(entry.ramdisk_type)
@@ -742,4 +739,112 @@ pub fn select_vendor_ramdisk_fragments(
         });
     }
     Ok(selected)
+}
+
+
+#[cfg(test)]
+mod fragment_selection_tests {
+    use super::*;
+
+    fn v4_image() -> Vec<u8> {
+        let mut image = vec![0_u8; 16_384];
+        image[..8].copy_from_slice(b"VNDRBOOT");
+        image[8..12].copy_from_slice(&4_u32.to_le_bytes());
+        image[12..16].copy_from_slice(&4096_u32.to_le_bytes());
+        image[24..28].copy_from_slice(&1024_u32.to_le_bytes());
+        image[2096..2100].copy_from_slice(&2128_u32.to_le_bytes());
+        image[2100..2104].copy_from_slice(&2048_u32.to_le_bytes());
+        image[2104..2112].copy_from_slice(&0x8200_0000_u64.to_le_bytes());
+        image[2112..2116].copy_from_slice(&216_u32.to_le_bytes());
+        image[2116..2120].copy_from_slice(&2_u32.to_le_bytes());
+        image[2120..2124].copy_from_slice(&108_u32.to_le_bytes());
+        image[2124..2128].copy_from_slice(&0_u32.to_le_bytes());
+
+        // Two non-overlapping 256-byte fragments within the 1 KiB vendor ramdisk.
+        image[4096..4100].copy_from_slice(&[1, 2, 3, 4]);
+        let table = 12_288;
+        for (slot, kind, board_word) in [(0_usize, 1_u32, 0x1234_u32), (1, 2, 0_u32)] {
+            let offset = table + slot * 108;
+            image[offset..offset + 4].copy_from_slice(&256_u32.to_le_bytes());
+            image[offset + 4..offset + 8]
+                .copy_from_slice(&(slot as u32 * 256).to_le_bytes());
+            image[offset + 8..offset + 12].copy_from_slice(&kind.to_le_bytes());
+            image[offset + 12..offset + 16].copy_from_slice(if slot == 0 {
+                b"plat"
+            } else {
+                b"reco"
+            });
+            image[offset + 44..offset + 48].copy_from_slice(&board_word.to_le_bytes());
+        }
+        image
+    }
+
+    fn board(id: u32) -> [u32; VENDOR_RAMDISK_BOARD_ID_WORDS] {
+        let mut value = [0_u32; VENDOR_RAMDISK_BOARD_ID_WORDS];
+        value[0] = id;
+        value
+    }
+
+    #[test]
+    fn normal_mode_selects_matching_platform_fragments_only() {
+        let image = v4_image();
+        let index = parse_vendor_boot_image_v3_v4(
+            &image,
+            ParseBudget { max_input_bytes: 1 << 20, max_items: 16, max_nesting_depth: 4 },
+            4096,
+        ).unwrap();
+        let selected = select_vendor_ramdisk_fragments(
+            &index, &board(0x1234), VendorRamdiskBootMode::Normal, 4
+        ).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].table_index, 0);
+        assert_eq!(selected[0].fragment_type, VendorRamdiskFragmentType::Platform);
+        assert_eq!(selected[0].payload, 4096..4352);
+    }
+
+    #[test]
+    fn recovery_mode_selects_recovery_fragments_and_zero_board_id_is_wildcard() {
+        let image = v4_image();
+        let index = parse_vendor_boot_image_v3_v4(
+            &image,
+            ParseBudget { max_input_bytes: 1 << 20, max_items: 16, max_nesting_depth: 4 },
+            4096,
+        ).unwrap();
+        let selected = select_vendor_ramdisk_fragments(
+            &index, &board(0x9999), VendorRamdiskBootMode::Recovery, 1
+        ).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].table_index, 1);
+        assert_eq!(selected[0].fragment_type, VendorRamdiskFragmentType::Recovery);
+    }
+
+    #[test]
+    fn selection_budget_limits_matches_not_total_table_entries() {
+        let image = v4_image();
+        let index = parse_vendor_boot_image_v3_v4(
+            &image,
+            ParseBudget { max_input_bytes: 1 << 20, max_items: 16, max_nesting_depth: 4 },
+            4096,
+        ).unwrap();
+        assert_eq!(
+            select_vendor_ramdisk_fragments(
+                &index, &board(0x1234), VendorRamdiskBootMode::Normal, 0
+            ),
+            Err(BootMaterialError::ResourceLimit)
+        );
+    }
+
+    #[test]
+    fn parser_rejects_unknown_fragment_type() {
+        let mut image = v4_image();
+        image[12_288 + 8..12_288 + 12].copy_from_slice(&99_u32.to_le_bytes());
+        assert_eq!(
+            parse_vendor_boot_image_v3_v4(
+                &image,
+                ParseBudget { max_input_bytes: 1 << 20, max_items: 16, max_nesting_depth: 4 },
+                4096,
+            ),
+            Err(ParseError::InvalidBootHeader)
+        );
+    }
 }
