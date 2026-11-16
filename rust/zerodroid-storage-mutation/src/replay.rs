@@ -137,9 +137,19 @@ impl ReplayState {
                     if vm.objects.len() >= HARD_MAX_REPLAY_OBJECTS_PER_VM {
                         return Err(ReplayError::ObjectLimitExceeded);
                     }
-                    let used_ids: usize = self.vms.values().map(|v| v.used_object_ids.len()).sum();
-                    if used_ids.saturating_add(vm.used_object_ids.len() - self.vms.get(&tx.vm_id).map_or(0, |old| old.used_object_ids.len()))
-                        >= HARD_MAX_REPLAY_OBJECT_IDS {
+                    // Count IDs from every other VM plus the candidate VM's
+                    // current generation. A generation reset may make the
+                    // candidate set smaller than the old VM set, so subtract
+                    // with saturation rather than unsigned arithmetic.
+                    let total_used_ids = self.vms.values()
+                        .map(|state| state.used_object_ids.len())
+                        .sum::<usize>();
+                    let replaced_vm_ids = self.vms.get(&tx.vm_id)
+                        .map_or(0, |state| state.used_object_ids.len());
+                    let other_vm_ids = total_used_ids.saturating_sub(replaced_vm_ids);
+                    if other_vm_ids.saturating_add(vm.used_object_ids.len())
+                        >= HARD_MAX_REPLAY_OBJECT_IDS
+                    {
                         return Err(ReplayError::ObjectIdLimitExceeded);
                     }
                     vm.used_object_ids.insert(*object_id);
@@ -250,6 +260,22 @@ mod replay_tests {
         assert_eq!(state.apply_transaction(&bad), Err(ReplayError::QuotaExceeded));
         assert_eq!(state.allocated_bytes(1).unwrap(), 0);
         assert_eq!(state.last_commit_sequence(), Some(1));
+    }
+
+    #[test]
+    fn generation_reset_does_not_underflow_global_object_id_accounting() {
+        let mut state = ReplayState::new();
+        state.apply_transaction(&tx(1, vec![
+            StorageMutation::VmRegister { vm_id: 1, generation: 1, quota_bytes: 4096 },
+            StorageMutation::ObjectCreate { vm_id: 1, generation: 1, object_id: 7, capacity_bytes: 4096, name: "old".into() },
+        ])).unwrap();
+        state.apply_transaction(&tx(2, vec![
+            StorageMutation::VmRegister { vm_id: 1, generation: 2, quota_bytes: 4096 },
+        ])).unwrap();
+        state.apply_transaction(&tx(3, vec![
+            StorageMutation::ObjectCreate { vm_id: 1, generation: 2, object_id: 8, capacity_bytes: 4096, name: "new".into() },
+        ])).unwrap();
+        assert_eq!(state.object_count(1).unwrap(), 1);
     }
 
     #[test]
