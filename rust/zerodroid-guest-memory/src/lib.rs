@@ -6,7 +6,7 @@
 //! backend supplies the source reader and GPA writer. Loading is chunked and
 //! reports partial progress because generic backend writes cannot be rolled back.
 
-use zerodroid_vm_spec_core::{GuestMachineSpec, GuestBootPlan};
+use zerodroid_vm_spec_core::{boot_plan::GuestBootPlan, GuestMachineSpec};
 
 pub const DEFAULT_CHUNK_BYTES: usize = 1024 * 1024;
 pub const MAX_CHUNK_BYTES: usize = 4 * 1024 * 1024;
