@@ -124,8 +124,8 @@ where
 mod tests {
     use super::*;
     use zerodroid_vm_spec_core::{
-        Arm64BootRegisters, BootSegment, BootSegmentKind, GuestArchitecture,
-        GuestMemoryRegion, MemoryRegionKind, PAGE_SIZE_4K,
+        boot_plan::{Arm64BootRegisters, BootSegment, BootSegmentKind},
+        GuestArchitecture, GuestMemoryRegion, MemoryRegionKind, PAGE_SIZE_4K,
     };
 
     struct VecSource(Vec<u8>);
