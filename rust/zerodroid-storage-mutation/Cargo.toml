@@ -1,0 +1,9 @@
+[package]
+name = "zerodroid-storage-mutation"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Versioned, bounded storage mutation payload schema for ZeroDroid"
+
+[dependencies]
+zerodroid-storage-journal = { path = "../zerodroid-storage-journal" }

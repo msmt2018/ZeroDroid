@@ -29,6 +29,12 @@ The memory backend in tests proves core semantics only; it is not evidence of du
 - Maximum objects per VM: 1,024, bounding the volatile registry.
 - Batch pages: request-derived and bounded to at most 4098 pages.
 
+## Stable identity and object lifecycle
+
+The core now exposes `create_object_with_id` and `object_id` so a future recovery coordinator can restore the Object ID recorded in the mutation journal instead of allocating a different identity. IDs are nonzero, bounded to 65,536 per store lifetime, and remain reserved after object deletion and VM-generation changes. The ordinary `create_object` path uses the same insertion logic and advances its allocator past explicitly restored IDs.
+
+`delete_object` removes all allocated pages through one backend batch before removing the volatile registry entry. If the backend batch fails, the object and allocation index remain visible and unchanged. This relies on the backend `commit_pages` all-or-nothing contract; it does not yet append a journal transaction or atomically combine page deletion with durable object metadata publication.
+
 ## Tests
 
-Tests cover sparse-zero reads, partial-page read/modify/write, quota rejection before commit, quota-shrink rejection, per-VM object-count bounds, discard reclamation, stale generation rejection, backend failure atomicity, flush forwarding, and object-name/capacity validation.
+Tests cover sparse-zero reads, partial-page read/modify/write, quota rejection before commit, quota-shrink rejection, per-VM object-count bounds, discard reclamation, stale generation rejection, backend failure atomicity, flush forwarding, and object-name/capacity validation, stable-ID restore and duplicate rejection, object deletion, and failed-delete rollback.
