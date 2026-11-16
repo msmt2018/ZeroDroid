@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "zerodroid-ffi"
+version = "0.1.0"
+dependencies = [
+ "zerodroid-image-core",
+ "zerodroid-vm-spec-core",
+]
+
+[[package]]
 name = "zerodroid-image-core"
 version = "0.1.0"
 
