@@ -375,6 +375,21 @@ mod tests {
     }
 
     #[test]
+    fn queue_configuration_enforces_hard_frame_and_byte_caps() {
+        assert_eq!(
+            BoundedFrameQueue::new(1, MAX_QUEUED_FRAMES + 1, 1, limits()).err(),
+            Some(DisplayError::InvalidQueueConfig)
+        );
+        assert_eq!(
+            BoundedFrameQueue::new(1, 1, MAX_QUEUED_BYTES + 1, limits()).err(),
+            Some(DisplayError::InvalidQueueConfig)
+        );
+        let mut queue = BoundedFrameQueue::new(1, 1, 19_999, limits()).unwrap();
+        assert_eq!(queue.push(frame(1)), Err(DisplayError::QueueByteBudgetExceeded));
+        assert_eq!(queue.stats().queued_frames, 0);
+    }
+
+    #[test]
     fn rejects_frame_over_budget() {
         let mut value = frame(1);
         value.width = 4096;
