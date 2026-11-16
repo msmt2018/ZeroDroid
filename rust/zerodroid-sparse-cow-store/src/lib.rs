@@ -55,6 +55,11 @@ impl<B: SparseCowBackend> SparseCowStore<B> {
 
     pub fn register_vm(&mut self, vm: VmId, generation: u64, quota_bytes: u64) -> Result<(), StoreError> {
         if quota_bytes == 0 || quota_bytes > HARD_MAX_VM_QUOTA_BYTES { return Err(StoreError::QuotaExceeded); }
+        if self.vms.get(&vm.0).is_some_and(|current| current.generation != generation) {
+            // Old-generation objects become unreachable immediately. Their opaque
+            // backing pages are orphaned for backend garbage collection.
+            self.objects.retain(|(owner, _), _| *owner != vm.0);
+        }
         self.vms.insert(vm.0, VmMeta { generation, quota: quota_bytes });
         Ok(())
     }
@@ -86,7 +91,9 @@ impl<B: SparseCowBackend> SparseCowStore<B> {
             let count = (PAGE_SIZE - in_page).min(output.len() - cursor);
             if meta.allocated.contains(&page) {
                 let mut bytes = vec![0; PAGE_SIZE];
-                self.backend.read_page(vm, generation, meta.id, page, &mut bytes)?;
+                if !self.backend.read_page(vm, generation, meta.id, page, &mut bytes)? {
+                    return Err(StoreError::BackendFailure);
+                }
                 output[cursor..cursor + count].copy_from_slice(&bytes[in_page..in_page + count]);
             }
             cursor += count;
@@ -116,7 +123,9 @@ impl<B: SparseCowBackend> SparseCowStore<B> {
         for page in first..=last {
             let mut bytes = vec![0; PAGE_SIZE];
             if meta.allocated.contains(&page) {
-                self.backend.read_page(vm, generation, meta.id, page, &mut bytes)?;
+                if !self.backend.read_page(vm, generation, meta.id, page, &mut bytes)? {
+                    return Err(StoreError::BackendFailure);
+                }
             }
             let page_start = page * PAGE_SIZE as u64;
             let write_start = offset.max(page_start);
