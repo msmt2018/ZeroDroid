@@ -11,6 +11,7 @@ It deliberately stops at resource ownership. It is not a Guest display backend, 
 - `ANativeWindow_fromSurface` supplies the native-window reference owned by the returned lease.
 - The native registry owns exactly one acquired reference per live handle.
 - Handles are monotonic, non-zero and never intentionally reused; exhaustion fails closed.
+- The process-wide live-lease registry is capped at 64 entries; reaching the cap fails closed.
 - Registry allocation failure is reported and the acquired native reference is released by RAII.
 - Query and release are serialized against registry mutation.
 - Release removes the handle under the registry lock and drops the native reference after unlocking.
