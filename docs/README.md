@@ -51,6 +51,7 @@
 43. [Android Host 输入到 Guest VirtIO Input 架构](43-android-guest-input-and-virtio-input-architecture.md)
 44. [Guest Display Frame Transport Contract](44-guest-display-frame-transport-contract.md)
 45. [Virtual Fastboot、Guest Bootloader 与虚拟分区刷写契约](45-virtual-fastboot-and-guest-flash-architecture.md)
+46. [Guest 虚拟分区存储与刷写事务核心](46-guest-partition-store-and-flash-transaction-core.md)
 
 ## 设计基线
 
